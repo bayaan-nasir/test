@@ -1,0 +1,16 @@
+services:
+  ml_api:
+    build: .
+    container_name: medical_ml_api
+    volumes:
+      - .:/app
+      - shared_media:/app/media/gradcam
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONPATH=/app/ml_service:/app
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-3.6-flash
+
+volumes:
+  shared_media:

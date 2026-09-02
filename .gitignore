@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+
+# Data — never commit raw datasets or model weights to git
+data/raw/
+data/processed/
+model_registry/
+*.pth
+*.pt
+*.pkl
+*.onnx
+*.joblib
+
+# Media outputs
+media/
+
+# MLflow
+mlruns/
+mlruns_lab_backup/
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+
+# Kaggle
+kaggle.json
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+node_modules/
+api/inferences/
+**/migrations/

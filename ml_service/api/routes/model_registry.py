@@ -315,7 +315,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/covid19",
               },
-              "image_type_value": "covid19",
+              "image_type_value": "xray",
               "inputs": [
                   {
                       "name": "file",
@@ -326,7 +326,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "covid19",
+                      "value": "xray",
                       "required": True,
                   },
                   {
@@ -348,7 +348,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/tuberculosis",
               },
-              "image_type_value": "tuberculosis",
+              "image_type_value": "xray",
               "inputs": [
                   {
                       "name": "file",
@@ -359,7 +359,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "tuberculosis",
+                      "value": "xray",
                       "required": True,
                   },
                   {
@@ -381,7 +381,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/malaria",
               },
-              "image_type_value": "malaria",
+              "image_type_value": "blood_smear",
               "inputs": [
                   {
                       "name": "file",
@@ -392,7 +392,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "malaria",
+                      "value": "blood_smear",
                       "required": True,
                   },
                   {
@@ -414,7 +414,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/skin-conditions",
               },
-              "image_type_value": "skin_conditions",
+              "image_type_value": "skin",
               "inputs": [
                   {
                       "name": "file",
@@ -425,7 +425,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "skin_conditions",
+                      "value": "skin",
                       "required": True,
                   },
                   {
@@ -447,7 +447,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/skin-cancer",
               },
-              "image_type_value": "skin_cancer",
+              "image_type_value": "skin",
               "inputs": [
                   {
                       "name": "file",
@@ -458,7 +458,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "skin_cancer",
+                      "value": "skin",
                       "required": True,
                   },
                   {
@@ -480,7 +480,7 @@ def get_model_registry():
                   "unified": "/api/ml/diagnose/image-based",
                   "individual": "/api/ml/predict/breast-cancer",
               },
-              "image_type_value": "breast_cancer",
+              "image_type_value": "histology",
               "inputs": [
                   {
                       "name": "file",
@@ -491,7 +491,7 @@ def get_model_registry():
                   {
                       "name": "image_type",
                       "type": "string",
-                      "value": "breast_cancer",
+                      "value": "histology",
                       "required": True,
                   },
                   {

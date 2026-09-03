@@ -28,7 +28,7 @@ from core.logger import logger
 from api.routes import (
     predict, health, malaria, diabetes,
     tuberculosis, heart_disease, skin_cancer, breast_cancer,
-    covid19, anaemia, hypertension, hepatitis_b, skin_conditions,
+    covid19, anaemia, hypertension, hepatitis_b, skin_conditions, model_registry
 )
 from api.routes import unified_image, unified_symptoms
 
@@ -241,6 +241,7 @@ app.include_router(anaemia.router)
 app.include_router(hypertension.router)
 app.include_router(hepatitis_b.router)
 app.include_router(skin_conditions.router)
+app.include_router(model_registry.router)
 app.include_router(health.router)
 
 

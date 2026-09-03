@@ -1,10 +1,8 @@
-from datetime import timezone
 import json
+from socket import timeout
 
 import requests
 from django.conf import settings
-
-from inference.models import Inference, InferenceStatus
 
 
 class MLServiceError(Exception):
@@ -79,6 +77,16 @@ class MLClient:
 
         return self._handle_response(response)
 
+    def get_model_registry(self, timeout: int = 15) -> dict:
+        url = f"{self.base_url}/api/ml/models"
+
+        try:
+            response = requests.get(url, timeout=timeout)
+        except requests.RequestException as exc:
+            raise MLServiceError(f"Unable to connect to ML service: {exc}") from exc
+
+        return self._handle_response(response)
+
     @staticmethod
     def _handle_response(response) -> dict:
         try:
@@ -98,32 +106,12 @@ class MLClient:
 
         return data
 
-    def _save_result(inference: Inference, result: dict):
-        top_result = result.get("top_result") or {}
+    def get_model_registry(self, timeout: int = 15) -> dict:
+        url = f"{self.base_url}/api/ml/models"
 
-        inference.response_payload = result
-        inference.fastapi_request_id = result.get("request_id")
-        inference.overall_triage = result.get("overall_triage", "")
-        inference.predicted_class = top_result.get("predicted_class", "")
-        inference.confidence = top_result.get("confidence_pct")
-        inference.clinical_summary = result.get(
-            "clinical_summary",
-            "",
-        )
-        inference.status = InferenceStatus.COMPLETED
-        inference.completed_at = timezone.now()
-        inference.error_message = ""
+        try:
+            response = requests.get(url, timeout=timeout)
+        except requests.RequestException as exc:
+            raise MLServiceError(f"Unable to connect to ML service: {exc}") from exc
 
-        inference.save(
-            update_fields=[
-                "response_payload",
-                "fastapi_request_id",
-                "overall_triage",
-                "predicted_class",
-                "confidence",
-                "clinical_summary",
-                "status",
-                "completed_at",
-                "error_message",
-            ]
-        )
+        return self._handle_response(response)

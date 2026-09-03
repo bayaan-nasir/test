@@ -17,89 +17,73 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import api from "../../api/client";
+import {
+  getModelRegistry,
+  type ModelField,
+  type ModelRegistryEntry,
+} from "../../api/inference";
 import { getPatients, type Patient as ApiPatient } from "../../api/patients";
 
 type Modality = "tabular" | "image" | "multimodal";
-
-type ModelId = "unified_symptoms" | "unified_image";
-
 type ImageType = "xray" | "skin" | "blood_smear" | "histology";
+
+const AUTO_MODEL_ID = "__auto__";
 
 interface ClinicalField {
   key: string;
   label: string;
   value: string;
-  unit?: string;
+  type: "integer" | "float" | "string";
+  required: boolean;
+  options: { value: string; label: string }[];
 }
 
-const initialFields: ClinicalField[] = [
-  { key: "age", label: "Age", value: "34", unit: "years" },
-  { key: "sex", label: "Sex (0 = female, 1 = male)", value: "0" },
-  { key: "glucose", label: "Glucose", value: "100", unit: "mg/dL" },
-  { key: "bmi", label: "BMI", value: "24", unit: "kg/m²" },
-  {
-    key: "trestbps",
-    label: "Resting blood pressure",
-    value: "120",
-    unit: "mmHg",
-  },
-  { key: "chol", label: "Cholesterol", value: "180", unit: "mg/dL" },
-  { key: "thalach", label: "Max heart rate", value: "150", unit: "bpm" },
-  { key: "cp", label: "Chest pain type (0-3)", value: "0" },
-  { key: "hemoglobin", label: "Hemoglobin", value: "13.5", unit: "g/dL" },
-  { key: "salt_intake", label: "Salt intake", value: "6", unit: "g/day" },
-  { key: "sleep_hours", label: "Sleep", value: "7", unit: "hours" },
-  { key: "smoking", label: "Smoking (0 = no, 1 = yes)", value: "0" },
+const imageTypes: { value: ImageType; label: string; description: string }[] = [
+  { value: "xray", label: "Chest X-Ray", description: "Chest radiography" },
+  { value: "skin", label: "Skin", description: "Clinical skin photograph" },
+  { value: "blood_smear", label: "Blood Smear", description: "Peripheral blood smear" },
+  { value: "histology", label: "Histology", description: "Tissue histology image" },
 ];
 
-const models: {
-  id: ModelId;
-  name: string;
-  description: string;
-  modality: Modality;
-}[] = [
-  {
-    id: "unified_symptoms",
-    name: "Unified Symptoms",
-    description:
-      "Automatically routes structured clinical data to all applicable tabular models.",
-    modality: "tabular",
-  },
-  {
-    id: "unified_image",
-    name: "Unified Image",
-    description:
-      "Automatically routes medical images to the appropriate image model, with optional clinical data.",
-    modality: "image",
-  },
-];
+function fieldLabel(field: ModelField) {
+  if (field.description) return field.description;
+  return field.name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-const imageTypes: {
-  value: ImageType;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "xray",
-    label: "Chest X-Ray",
-    description: "Chest radiography",
-  },
-  {
-    value: "skin",
-    label: "Skin",
-    description: "Clinical skin photograph",
-  },
-  {
-    value: "blood_smear",
-    label: "Blood Smear",
-    description: "Peripheral blood smear",
-  },
-  {
-    value: "histology",
-    label: "Histology",
-    description: "Tissue histology image",
-  },
-];
+function flattenOptions(field: ModelField) {
+  return (field.options ?? []).map((opt) => {
+    const [value, label] = Object.entries(opt)[0];
+    return { value, label };
+  });
+}
+
+function toClinicalField(field: ModelField): ClinicalField {
+  return {
+    key: field.name,
+    label: fieldLabel(field),
+    value: "",
+    type: field.type === "integer" || field.type === "float" ? field.type : "string",
+    required: field.required,
+    options: flattenOptions(field),
+  };
+}
+
+function buildFieldsForModel(tabularModels: ModelRegistryEntry[], modelId: string): ClinicalField[] {
+  if (modelId === AUTO_MODEL_ID) {
+    const seen = new Map<string, ClinicalField>();
+    for (const model of tabularModels) {
+      for (const field of model.fields ?? []) {
+        if (!seen.has(field.name)) {
+          seen.set(field.name, toClinicalField(field));
+        }
+      }
+    }
+    return Array.from(seen.values());
+  }
+
+  const model = tabularModels.find((m) => m.model_id === modelId);
+  return (model?.fields ?? []).map(toClinicalField);
+}
 
 function parseClinicalValue(value: string) {
   if (value.trim() === "") {
@@ -142,12 +126,15 @@ export function InferenceWorkspace() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [modality, setModality] = useState<Modality>("tabular");
-  const [selectedModel, setSelectedModel] =
-    useState<ModelId>("unified_symptoms");
 
+  const [registryModels, setRegistryModels] = useState<ModelRegistryEntry[]>([]);
+  const [isLoadingRegistry, setIsLoadingRegistry] = useState(true);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+
+  const [selectedTabularModelId, setSelectedTabularModelId] = useState(AUTO_MODEL_ID);
   const [showModelMenu, setShowModelMenu] = useState(false);
 
-  const [fields, setFields] = useState(initialFields);
+  const [fields, setFields] = useState<ClinicalField[]>([]);
 
   const [notes, setNotes] = useState("");
 
@@ -158,9 +145,7 @@ export function InferenceWorkspace() {
   const [showPatientMenu, setShowPatientMenu] = useState(false);
 
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
-  const [selectedImageName, setSelectedImageName] = useState<string | null>(
-    null,
-  );
+  const [selectedImageName, setSelectedImageName] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageType, setImageType] = useState<ImageType>("xray");
 
@@ -169,16 +154,25 @@ export function InferenceWorkspace() {
   const [error, setError] = useState<string | null>(null);
 
   const patientMenuRef = useRef<HTMLDivElement>(null);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
 
-  const model = useMemo(
-    () => models.find((item) => item.id === selectedModel) ?? models[0],
-    [selectedModel],
+  const tabularModels = useMemo(
+    () => registryModels.filter((m) => m.modality === "tabular"),
+    [registryModels],
   );
 
+  const selectedTabularModel = useMemo(
+    () => tabularModels.find((m) => m.model_id === selectedTabularModelId) ?? null,
+    [tabularModels, selectedTabularModelId],
+  );
+
+  const missingRequiredFields = useMemo(() => {
+    if (selectedTabularModelId === AUTO_MODEL_ID) return [];
+    return fields.filter((field) => field.required && field.value.trim() === "");
+  }, [fields, selectedTabularModelId]);
+
   const selectedPatient = useMemo(
-    () =>
-      patients.find((patient) => patient.patient_id === selectedPatientId) ??
-      null,
+    () => patients.find((patient) => patient.patient_id === selectedPatientId) ?? null,
     [patients, selectedPatientId],
   );
 
@@ -190,8 +184,7 @@ export function InferenceWorkspace() {
     }
 
     return patients.filter((patient) => {
-      const name =
-        patient.full_name ?? `${patient.first_name} ${patient.last_name}`;
+      const name = patient.full_name ?? `${patient.first_name} ${patient.last_name}`;
 
       return (
         name.toLowerCase().includes(query) ||
@@ -200,6 +193,38 @@ export function InferenceWorkspace() {
       );
     });
   }, [patients, patientSearch]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRegistry() {
+      setIsLoadingRegistry(true);
+      setRegistryError(null);
+
+      try {
+        const registry = await getModelRegistry();
+        if (active) setRegistryModels(registry.models);
+      } catch {
+        if (active) {
+          setRegistryError(
+            "Unable to load the model registry. The ML service may be unavailable.",
+          );
+        }
+      } finally {
+        if (active) setIsLoadingRegistry(false);
+      }
+    }
+
+    loadRegistry();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isLoadingRegistry) return;
+    setFields(buildFieldsForModel(tabularModels, selectedTabularModelId));
+  }, [isLoadingRegistry, tabularModels, selectedTabularModelId]);
 
   useEffect(() => {
     let active = true;
@@ -216,10 +241,7 @@ export function InferenceWorkspace() {
 
         const patientParam = searchParams.get("patient");
 
-        if (
-          patientParam &&
-          data.some((patient) => patient.patient_id === patientParam)
-        ) {
+        if (patientParam && data.some((patient) => patient.patient_id === patientParam)) {
           setSelectedPatientId(patientParam);
         }
       } catch {
@@ -244,11 +266,11 @@ export function InferenceWorkspace() {
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
-      if (
-        patientMenuRef.current &&
-        !patientMenuRef.current.contains(event.target as Node)
-      ) {
+      if (patientMenuRef.current && !patientMenuRef.current.contains(event.target as Node)) {
         setShowPatientMenu(false);
+      }
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
+        setShowModelMenu(false);
       }
     }
 
@@ -258,16 +280,6 @@ export function InferenceWorkspace() {
       document.removeEventListener("mousedown", handleOutsideClick);
     };
   }, []);
-
-  useEffect(() => {
-    if (modality === "tabular") {
-      setSelectedModel("unified_symptoms");
-    }
-
-    if (modality === "image" || modality === "multimodal") {
-      setSelectedModel("unified_image");
-    }
-  }, [modality]);
 
   useEffect(() => {
     return () => {
@@ -284,9 +296,16 @@ export function InferenceWorkspace() {
   };
 
   const canRun =
-    (modality === "tabular" && fields.length > 0) ||
+    (modality === "tabular" &&
+      !isLoadingRegistry &&
+      fields.length > 0 &&
+      missingRequiredFields.length === 0) ||
     (modality === "image" && !!selectedImageFile) ||
-    (modality === "multimodal" && fields.length > 0 && !!selectedImageFile);
+    (modality === "multimodal" &&
+      !isLoadingRegistry &&
+      fields.length > 0 &&
+      missingRequiredFields.length === 0 &&
+      !!selectedImageFile);
 
   const buildSymptomsPayload = () =>
     Object.fromEntries(
@@ -360,7 +379,7 @@ export function InferenceWorkspace() {
     try {
       const symptoms = buildSymptomsPayload();
 
-      if (selectedModel === "unified_symptoms") {
+      if (modality === "tabular") {
         const response = await api.post("/inference/symptoms/", {
           patient_id: selectedPatientId || null,
           clinical_notes: notes,
@@ -374,9 +393,7 @@ export function InferenceWorkspace() {
         }
 
         if (selectedPatientId) {
-          setSearchParams({
-            patient: selectedPatientId,
-          });
+          setSearchParams({ patient: selectedPatientId });
         } else {
           setSearchParams({});
         }
@@ -412,9 +429,7 @@ export function InferenceWorkspace() {
       }
 
       if (selectedPatientId) {
-        setSearchParams({
-          patient: selectedPatientId,
-        });
+        setSearchParams({ patient: selectedPatientId });
       } else {
         setSearchParams({});
       }
@@ -443,15 +458,9 @@ export function InferenceWorkspace() {
 
       const message =
         (typeof detail === "string" && detail) ||
-        (Array.isArray(nonFieldErrors)
-          ? nonFieldErrors.join(" ")
-          : nonFieldErrors) ||
-        (Array.isArray(symptomErrors)
-          ? symptomErrors.join(" ")
-          : symptomErrors) ||
-        (Array.isArray(patientErrors)
-          ? patientErrors.join(" ")
-          : patientErrors) ||
+        (Array.isArray(nonFieldErrors) ? nonFieldErrors.join(" ") : nonFieldErrors) ||
+        (Array.isArray(symptomErrors) ? symptomErrors.join(" ") : symptomErrors) ||
+        (Array.isArray(patientErrors) ? patientErrors.join(" ") : patientErrors) ||
         maybeError.message ||
         "Unable to submit inference. Please verify the inputs and try again.";
 
@@ -466,7 +475,8 @@ export function InferenceWorkspace() {
   };
 
   const handleReset = () => {
-    setFields(initialFields);
+    setSelectedTabularModelId(AUTO_MODEL_ID);
+    setFields(buildFieldsForModel(tabularModels, AUTO_MODEL_ID));
     setNotes("");
     clearImage();
     setImageType("xray");
@@ -497,8 +507,7 @@ export function InferenceWorkspace() {
             </h1>
 
             <p className="mt-1 max-w-xl text-[10px] leading-5 text-gray-400">
-              Provide clinical inputs and imaging data for AI-assisted
-              assessment.
+              Provide clinical inputs and imaging data for AI-assisted assessment.
             </p>
           </div>
 
@@ -508,12 +517,8 @@ export function InferenceWorkspace() {
             </div>
 
             <div>
-              <div className="text-[8px] font-semibold text-gray-700">
-                Inference engine ready
-              </div>
-              <div className="mt-0.5 text-[7px] text-gray-400">
-                All systems operational
-              </div>
+              <div className="text-[8px] font-semibold text-gray-700">Inference engine ready</div>
+              <div className="mt-0.5 text-[7px] text-gray-400">All systems operational</div>
             </div>
           </div>
         </div>
@@ -521,15 +526,10 @@ export function InferenceWorkspace() {
 
       <section className="mb-5 grid gap-4 lg:grid-cols-[1fr_1.4fr]">
         {/* Patient */}
-        <div
-          ref={patientMenuRef}
-          className="relative rounded-xl border border-gray-200 bg-white p-4"
-        >
+        <div ref={patientMenuRef} className="relative rounded-xl border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
-                Patient
-              </div>
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">Patient</div>
               <div className="mt-1 text-[7px] text-gray-300">Optional</div>
             </div>
 
@@ -556,13 +556,11 @@ export function InferenceWorkspace() {
 
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] font-semibold text-gray-800">
-                  {selectedPatient.full_name ??
-                    `${selectedPatient.first_name} ${selectedPatient.last_name}`}
+                  {selectedPatient.full_name ?? `${selectedPatient.first_name} ${selectedPatient.last_name}`}
                 </div>
 
                 <div className="mt-1 font-mono text-[7px] text-gray-400">
-                  {selectedPatient.patient_id} ·{" "}
-                  {selectedPatient.sex ?? "Unknown"} ·{" "}
+                  {selectedPatient.patient_id} · {selectedPatient.sex ?? "Unknown"} ·{" "}
                   {calculateAge(selectedPatient.date_of_birth)}
                 </div>
               </div>
@@ -580,13 +578,8 @@ export function InferenceWorkspace() {
               </div>
 
               <div className="min-w-0 flex-1">
-                <div className="text-[10px] font-semibold text-gray-700">
-                  Anonymous patient
-                </div>
-
-                <div className="mt-1 text-[7px] text-gray-400">
-                  No patient record will be attached
-                </div>
+                <div className="text-[10px] font-semibold text-gray-700">Anonymous patient</div>
+                <div className="mt-1 text-[7px] text-gray-400">No patient record will be attached</div>
               </div>
 
               <ChevronDown size={13} className="shrink-0 text-gray-400" />
@@ -597,10 +590,7 @@ export function InferenceWorkspace() {
             <div className="absolute left-4 right-4 top-21.5 z-30 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
               <div className="border-b border-gray-100 p-2">
                 <div className="relative">
-                  <Search
-                    size={11}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300"
-                  />
+                  <Search size={11} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
 
                   <input
                     type="text"
@@ -623,34 +613,21 @@ export function InferenceWorkspace() {
                 </div>
 
                 <div>
-                  <div className="text-[8px] font-semibold text-gray-700">
-                    Anonymous patient
-                  </div>
-                  <div className="mt-0.5 text-[7px] text-gray-400">
-                    Run without attaching a patient
-                  </div>
+                  <div className="text-[8px] font-semibold text-gray-700">Anonymous patient</div>
+                  <div className="mt-0.5 text-[7px] text-gray-400">Run without attaching a patient</div>
                 </div>
 
-                {!selectedPatient && (
-                  <Check size={11} className="ml-auto text-gray-500" />
-                )}
+                {!selectedPatient && <Check size={11} className="ml-auto text-gray-500" />}
               </button>
 
               <div className="max-h-64 overflow-y-auto">
                 {isLoadingPatients ? (
-                  <div className="px-3 py-4 text-[8px] text-gray-400">
-                    Loading patients…
-                  </div>
+                  <div className="px-3 py-4 text-[8px] text-gray-400">Loading patients…</div>
                 ) : filteredPatients.length === 0 ? (
-                  <div className="px-3 py-4 text-[8px] text-gray-400">
-                    No matching patients.
-                  </div>
+                  <div className="px-3 py-4 text-[8px] text-gray-400">No matching patients.</div>
                 ) : (
                   filteredPatients.map((patient) => {
-                    const name =
-                      patient.full_name ??
-                      `${patient.first_name} ${patient.last_name}`;
-
+                    const name = patient.full_name ?? `${patient.first_name} ${patient.last_name}`;
                     const isSelected = patient.patient_id === selectedPatientId;
 
                     return (
@@ -665,19 +642,14 @@ export function InferenceWorkspace() {
                         </div>
 
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[8px] font-semibold text-gray-700">
-                            {name}
-                          </div>
+                          <div className="truncate text-[8px] font-semibold text-gray-700">{name}</div>
 
                           <div className="mt-0.5 truncate font-mono text-[6px] text-gray-400">
-                            {patient.patient_id} ·{" "}
-                            {calculateAge(patient.date_of_birth)}
+                            {patient.patient_id} · {calculateAge(patient.date_of_birth)}
                           </div>
                         </div>
 
-                        {isSelected && (
-                          <Check size={11} className="shrink-0 text-gray-500" />
-                        )}
+                        {isSelected && <Check size={11} className="shrink-0 text-gray-500" />}
                       </button>
                     );
                   })
@@ -687,76 +659,105 @@ export function InferenceWorkspace() {
           )}
         </div>
 
-        {/* AI Model */}
-        <div className="relative rounded-xl border border-gray-200 bg-white p-4">
+        {/* Tabular model selection */}
+        <div ref={modelMenuRef} className="relative rounded-xl border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
-              AI model
+              {modality === "image" ? "Image routing" : "Tabular model"}
             </div>
 
-            <span className="rounded-md bg-gray-50 px-2 py-1 font-mono text-[7px] text-gray-400">
-              Unified
-            </span>
+            {modality !== "image" && (
+              <span className="rounded-md bg-gray-50 px-2 py-1 font-mono text-[7px] text-gray-400">
+                {tabularModels.length} available
+              </span>
+            )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowModelMenu((value) => !value)}
-            className="flex w-full items-center justify-between text-left"
-          >
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-gray-800">
-                {model.name}
-              </div>
-
-              <div className="mt-1 truncate text-[8px] text-gray-400">
-                {model.description}
-              </div>
-            </div>
-
-            <ChevronDown size={13} className="ml-3 shrink-0 text-gray-400" />
-          </button>
-
-          {showModelMenu && (
-            <div className="absolute left-4 right-4 top-18.5 z-20 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
-              {models.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedModel(item.id);
-                    setShowModelMenu(false);
-
-                    if (item.id === "unified_symptoms") {
-                      setModality("tabular");
-                    } else {
-                      setModality("image");
-                    }
-                  }}
-                  className="flex w-full items-start gap-3 border-b border-gray-100 p-3 text-left last:border-0 hover:bg-gray-50"
-                >
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-100">
-                    {selectedModel === item.id ? (
-                      <Check size={11} />
-                    ) : (
-                      <Activity size={11} />
-                    )}
+          {modality === "image" ? (
+            <p className="text-[9px] leading-5 text-gray-500">
+              Image models are selected automatically based on the image type you choose below.
+            </p>
+          ) : isLoadingRegistry ? (
+            <p className="text-[9px] text-gray-400">Loading available models…</p>
+          ) : registryError ? (
+            <p className="text-[9px] text-red-500">{registryError}</p>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowModelMenu((value) => !value)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold text-gray-800">
+                    {selectedTabularModelId === AUTO_MODEL_ID
+                      ? "Automatic (route to all applicable models)"
+                      : selectedTabularModel?.model_name ?? "Automatic"}
                   </div>
 
-                  <div className="min-w-0">
-                    <div className="text-[9px] font-semibold text-gray-700">
-                      {item.name}
+                  <div className="mt-1 truncate text-[8px] text-gray-400">
+                    {selectedTabularModelId === AUTO_MODEL_ID
+                      ? "Runs every model with enough data provided"
+                      : "Only fields for this model are shown below"}
+                  </div>
+                </div>
+
+                <ChevronDown size={13} className="ml-3 shrink-0 text-gray-400" />
+              </button>
+
+              {showModelMenu && (
+                <div className="absolute left-4 right-4 top-18.5 z-20 max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTabularModelId(AUTO_MODEL_ID);
+                      setShowModelMenu(false);
+                    }}
+                    className="flex w-full items-start gap-3 border-b border-gray-100 p-3 text-left hover:bg-gray-50"
+                  >
+                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-100">
+                      {selectedTabularModelId === AUTO_MODEL_ID ? (
+                        <Check size={11} />
+                      ) : (
+                        <Activity size={11} />
+                      )}
                     </div>
 
-                    <div className="mt-1 text-[7px] text-gray-400">
-                      {item.modality === "tabular"
-                        ? "Structured clinical data"
-                        : "Medical image + optional symptoms"}
+                    <div className="min-w-0">
+                      <div className="text-[9px] font-semibold text-gray-700">Automatic</div>
+                      <div className="mt-1 text-[7px] text-gray-400">
+                        Route to every tabular model with enough data
+                      </div>
                     </div>
-                  </div>
-                </button>
-              ))}
-            </div>
+                  </button>
+
+                  {tabularModels.map((model) => (
+                    <button
+                      key={model.model_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTabularModelId(model.model_id);
+                        setShowModelMenu(false);
+                      }}
+                      className="flex w-full items-start gap-3 border-b border-gray-100 p-3 text-left last:border-0 hover:bg-gray-50"
+                    >
+                      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-100">
+                        {selectedTabularModelId === model.model_id ? (
+                          <Check size={11} />
+                        ) : (
+                          <Activity size={11} />
+                        )}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="text-[9px] font-semibold text-gray-700">{model.model_name}</div>
+                        <div className="mt-1 text-[7px] text-gray-400">{model.task}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </section>
@@ -764,13 +765,10 @@ export function InferenceWorkspace() {
       <section className="mb-5 rounded-xl border border-gray-200 bg-white p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-[9px] font-semibold text-gray-800">
-              Input modality
-            </div>
+            <div className="text-[9px] font-semibold text-gray-800">Input modality</div>
 
             <p className="mt-1 text-[8px] text-gray-400">
-              Select the type of data you want to send to the unified inference
-              engine.
+              Select the type of data you want to send to the unified inference engine.
             </p>
           </div>
 
@@ -786,9 +784,7 @@ export function InferenceWorkspace() {
                 onClick={() => setModality(value as Modality)}
                 className={[
                   "rounded-md px-3 py-2 text-[8px] font-semibold transition",
-                  modality === value
-                    ? "bg-white text-gray-900 shadow-sm"
-                    : "text-gray-400 hover:text-gray-700",
+                  modality === value ? "bg-white text-gray-900 shadow-sm" : "text-gray-400 hover:text-gray-700",
                 ].join(" ")}
               >
                 {label}
@@ -804,12 +800,12 @@ export function InferenceWorkspace() {
             <div className="border-b border-gray-100 p-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-[11px] font-semibold text-gray-900">
-                    Clinical data
-                  </h2>
+                  <h2 className="text-[11px] font-semibold text-gray-900">Clinical data</h2>
 
                   <p className="mt-1 text-[8px] text-gray-400">
-                    Structured variables sent to the unified symptoms endpoint.
+                    {selectedTabularModelId === AUTO_MODEL_ID
+                      ? "Structured variables sent to the unified symptoms endpoint."
+                      : `Fields required by ${selectedTabularModel?.model_name ?? "this model"}.`}
                   </p>
                 </div>
 
@@ -819,46 +815,61 @@ export function InferenceWorkspace() {
               </div>
             </div>
 
-            <div className="grid gap-x-4 gap-y-4 p-5 sm:grid-cols-2">
-              {fields.map((field) => (
-                <label key={field.key}>
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[8px] font-medium text-gray-600">
-                      {field.label}
-                    </span>
-
-                    {field.unit && (
-                      <span className="text-[7px] text-gray-300">
-                        {field.unit}
+            {isLoadingRegistry ? (
+              <div className="p-5 text-[9px] text-gray-400">Loading clinical intake fields…</div>
+            ) : fields.length === 0 ? (
+              <div className="p-5 text-[9px] text-gray-400">No fields available for this model.</div>
+            ) : (
+              <div className="grid gap-x-4 gap-y-4 p-5 sm:grid-cols-2">
+                {fields.map((field) => (
+                  <label key={field.key}>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[8px] font-medium text-gray-600">
+                        {field.label}
+                        {field.required && <span className="ml-1 text-red-400">*</span>}
                       </span>
-                    )}
-                  </div>
+                    </div>
 
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={field.value}
-                      onChange={(event) =>
-                        updateField(field.key, event.target.value)
-                      }
-                      className="h-9 w-full rounded-lg border border-gray-200 bg-gray-50/50 px-3 text-[9px] text-gray-700 outline-none focus:border-gray-400 focus:bg-white"
-                    />
-
-                    {field.unit && (
-                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[7px] text-gray-300">
-                        {field.unit}
-                      </span>
+                    {field.options.length > 0 ? (
+                      <select
+                        value={field.value}
+                        onChange={(event) => updateField(field.key, event.target.value)}
+                        className="h-9 w-full rounded-lg border border-gray-200 bg-gray-50/50 px-3 text-[9px] text-gray-700 outline-none focus:border-gray-400 focus:bg-white"
+                      >
+                        <option value="">Select...</option>
+                        {field.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type === "string" ? "text" : "number"}
+                        inputMode={
+                          field.type === "integer" ? "numeric" : field.type === "float" ? "decimal" : "text"
+                        }
+                        step={field.type === "integer" ? 1 : field.type === "float" ? "any" : undefined}
+                        value={field.value}
+                        onChange={(event) => updateField(field.key, event.target.value)}
+                        className="h-9 w-full rounded-lg border border-gray-200 bg-gray-50/50 px-3 text-[9px] text-gray-700 outline-none focus:border-gray-400 focus:bg-white"
+                      />
                     )}
-                  </div>
-                </label>
-              ))}
-            </div>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {missingRequiredFields.length > 0 && (
+              <div className="mx-5 mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[8px] leading-4 text-amber-700">
+                Fill in the required fields for {selectedTabularModel?.model_name}:{" "}
+                {missingRequiredFields.map((f) => f.label).join(", ")}
+              </div>
+            )}
 
             <div className="border-t border-gray-100 p-5">
               <label>
-                <div className="mb-1.5 text-[8px] font-medium text-gray-600">
-                  Clinical notes
-                </div>
+                <div className="mb-1.5 text-[8px] font-medium text-gray-600">Clinical notes</div>
 
                 <textarea
                   value={notes}
@@ -876,9 +887,7 @@ export function InferenceWorkspace() {
           <section className="rounded-xl border border-gray-200 bg-white">
             <div className="border-b border-gray-100 p-5">
               <div>
-                <h2 className="text-[11px] font-semibold text-gray-900">
-                  Medical imaging
-                </h2>
+                <h2 className="text-[11px] font-semibold text-gray-900">Medical imaging</h2>
 
                 <p className="mt-1 text-[8px] text-gray-400">
                   Upload an image and select its clinical type.
@@ -888,9 +897,7 @@ export function InferenceWorkspace() {
 
             <div className="p-5">
               <div className="mb-4">
-                <div className="mb-2 text-[8px] font-medium text-gray-600">
-                  Image type
-                </div>
+                <div className="mb-2 text-[8px] font-medium text-gray-600">Image type</div>
 
                 <div className="grid grid-cols-2 gap-2">
                   {imageTypes.map((item) => (
@@ -900,22 +907,16 @@ export function InferenceWorkspace() {
                       onClick={() => setImageType(item.value)}
                       className={[
                         "rounded-lg border p-3 text-left transition",
-                        imageType === item.value
-                          ? "border-gray-400 bg-gray-50"
-                          : "border-gray-200 hover:bg-gray-50",
+                        imageType === item.value ? "border-gray-400 bg-gray-50" : "border-gray-200 hover:bg-gray-50",
                       ].join(" ")}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-[8px] font-semibold text-gray-700">
-                          {item.label}
-                        </span>
+                        <span className="text-[8px] font-semibold text-gray-700">{item.label}</span>
 
                         {imageType === item.value && <Check size={10} />}
                       </div>
 
-                      <div className="mt-1 text-[7px] text-gray-400">
-                        {item.description}
-                      </div>
+                      <div className="mt-1 text-[7px] text-gray-400">{item.description}</div>
                     </button>
                   ))}
                 </div>
@@ -956,7 +957,6 @@ export function InferenceWorkspace() {
                     accept="image/jpeg,image/png"
                     onChange={(event) => {
                       handleImageChange(event.target.files?.[0] ?? null);
-
                       event.target.value = "";
                     }}
                     className="hidden"
@@ -966,13 +966,9 @@ export function InferenceWorkspace() {
                     <Upload size={16} className="text-gray-400" />
                   </div>
 
-                  <div className="mt-4 text-[9px] font-semibold text-gray-700">
-                    Upload medical image
-                  </div>
+                  <div className="mt-4 text-[9px] font-semibold text-gray-700">Upload medical image</div>
 
-                  <div className="mt-1 text-[7px] text-gray-400">
-                    JPEG or PNG · maximum 10MB
-                  </div>
+                  <div className="mt-1 text-[7px] text-gray-400">JPEG or PNG · maximum 10MB</div>
                 </label>
               )}
 
@@ -980,8 +976,8 @@ export function InferenceWorkspace() {
                 <Info size={12} className="mt-0.5 shrink-0 text-gray-400" />
 
                 <p className="text-[7px] leading-4 text-gray-400">
-                  Ensure the image is clear and correctly oriented. Image
-                  quality can affect model performance.
+                  Ensure the image is clear and correctly oriented. Image quality can affect model
+                  performance.
                 </p>
               </div>
             </div>
@@ -997,27 +993,22 @@ export function InferenceWorkspace() {
             </div>
 
             <div>
-              <div className="text-[9px] font-semibold text-gray-800">
-                Ready to run
-              </div>
+              <div className="text-[9px] font-semibold text-gray-800">Ready to run</div>
 
               <p className="mt-1 max-w-lg text-[8px] leading-4 text-gray-400">
                 {selectedPatient ? (
                   <>
                     Results will be attached to{" "}
                     <span className="font-medium text-gray-600">
-                      {selectedPatient.full_name ??
-                        `${selectedPatient.first_name} ${selectedPatient.last_name}`}
+                      {selectedPatient.full_name ?? `${selectedPatient.first_name} ${selectedPatient.last_name}`}
                     </span>
                     .
                   </>
                 ) : (
                   <>
                     This inference will run as an{" "}
-                    <span className="font-medium text-gray-600">
-                      anonymous patient
-                    </span>{" "}
-                    without a patient record.
+                    <span className="font-medium text-gray-600">anonymous patient</span> without a patient
+                    record.
                   </>
                 )}
               </p>
@@ -1041,7 +1032,6 @@ export function InferenceWorkspace() {
               className="flex h-9 items-center justify-center gap-2 rounded-lg bg-gray-950 px-4 text-[8px] font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Play size={11} />
-
               {isSubmitting ? "Submitting..." : "Run inference"}
             </button>
           </div>
@@ -1058,8 +1048,8 @@ export function InferenceWorkspace() {
         <UserRound size={10} className="text-gray-300" />
 
         <p className="text-[7px] leading-4 text-gray-400">
-          AI-generated results are decision-support information and must be
-          reviewed by a qualified healthcare professional.
+          AI-generated results are decision-support information and must be reviewed by a qualified
+          healthcare professional.
         </p>
       </div>
     </div>

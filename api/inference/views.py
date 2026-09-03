@@ -4,6 +4,8 @@ import logging
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import generics, permissions, status
+from rest_framework.views import APIView
+from .services.ml_client import MLClient, MLServiceError
 from rest_framework.response import Response
 
 from accounts.models import UserRole
@@ -16,6 +18,8 @@ from .serializers import (
     InferenceSerializer,
 )
 from .tasks import run_image_inference, run_symptoms_inference
+from .services.ml_client import MLClient, MLServiceError
+from .analytics import compute_model_usage_stats
 
 logger = logging.getLogger(__name__)
 
@@ -167,3 +171,44 @@ class ImageInferenceCreateView(generics.CreateAPIView):
             InferenceSerializer(inference).data,
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class ModelRegistryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = MLClient().get_model_registry()
+        except MLServiceError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(data)
+
+
+class ModelRegistryView(APIView):
+    """Proxies the live ML service model registry so the frontend never
+    has to hardcode which models exist or what fields they accept."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = MLClient().get_model_registry()
+        except MLServiceError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(data)
+
+
+class ModelStatsView(APIView):
+    """Real per-model usage stats derived from completed Inference records
+    — see analytics.py for exactly what's computed and its limitations."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(compute_model_usage_stats())

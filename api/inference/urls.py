@@ -4,6 +4,8 @@ from .views import (
     ImageInferenceCreateView,
     InferenceDetailView,
     InferenceListView,
+    ModelRegistryView,
+    ModelStatsView,
     SymptomsInferenceCreateView,
 )
 
@@ -28,4 +30,6 @@ urlpatterns = [
         InferenceDetailView.as_view(),
         name="inference-detail",
     ),
+    path("models/", ModelRegistryView.as_view(), name="inference-models"),
+    path("model-stats/", ModelStatsView.as_view(), name="inference-model-stats"),
 ]

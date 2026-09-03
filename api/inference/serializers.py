@@ -75,9 +75,11 @@ class InferenceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_patient_id(self, obj):
-        return obj.patient.patient_id
+        return obj.patient.patient_id if obj.patient else None
 
     def get_patient_name(self, obj):
+        if not obj.patient:
+            return "Anonymous patient"
         return f"{obj.patient.first_name} {obj.patient.last_name}"
 
 
@@ -110,11 +112,11 @@ class CreateSymptomsInferenceSerializer(serializers.Serializer):
             raise serializers.ValidationError("Patient not found.") from exc
 
     def validate_patient_id(self, value):
-        patient = self._get_patient(value)
-        request = self.context.get("request")
-
         if not value:
             return None
+
+        patient = self._get_patient(value)
+        request = self.context.get("request")
 
         if request is None or not getattr(request, "user", None):
             return value
@@ -206,13 +208,11 @@ class CreateImageInferenceSerializer(serializers.Serializer):
             raise serializers.ValidationError("Patient not found.") from exc
 
     def validate_patient_id(self, value):
-        patient = self._get_patient(value)
-        request = self.context.get("request")
-
         if not value:
             return None
 
-        # existing patient/access validation...
+        patient = self._get_patient(value)
+        request = self.context.get("request")
 
         if request is None or not getattr(request, "user", None):
             return value

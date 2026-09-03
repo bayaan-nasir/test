@@ -115,7 +115,7 @@ export function Register() {
         </h2>
 
         <p className="mt-2 text-[13px] leading-5 text-gray-500">
-          Set up your clinical profile to access MEDAI.
+          Set up your clinical profile to access AI Diagnosis Assistant.
         </p>
       </div>
 

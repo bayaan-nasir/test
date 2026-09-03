@@ -4,58 +4,104 @@ import {
   BrainCircuit,
   CheckCircle2,
   Clock3,
-  FileImage,
   FileText,
-  ImageIcon,
   Info,
-  Layers3,
+  Loader2,
   ShieldCheck,
   Sparkles,
-  Table2,
   UserRound,
+  XCircle,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-const result = {
-  id: "INF-7F82A1",
-  patientId: "PT-10482",
-  patientName: "Ama Mensah",
-  model: "Respiratory Assessment",
-  version: "v2.4.1",
-  status: "Completed",
-  timestamp: "29 Aug 2026 · 14:32",
-  duration: "2.84 seconds",
-  primaryFinding: "Pneumonia",
-  confidence: 94.7,
-  risk: "High probability",
-};
+import {
+  getInference,
+  type Inference,
+  type InferenceModelResult,
+} from "../../api/inference";
 
-const predictions = [
-  {
-    label: "Pneumonia",
-    confidence: 94.7,
-    selected: true,
-  },
-  {
-    label: "Other abnormality",
-    confidence: 3.1,
-    selected: false,
-  },
-  {
-    label: "Normal",
-    confidence: 2.2,
-    selected: false,
-  },
-];
+const POLL_INTERVAL_MS = 3000;
 
-const observations = [
-  ["Heart rate", "74 bpm"],
-  ["Temperature", "36.7 °C"],
-  ["SpO₂", "98%"],
-  ["Respiratory rate", "16 /min"],
-  ["Systolic BP", "118 mmHg"],
-  ["Diastolic BP", "76 mmHg"],
-];
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatDuration(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs)
+    return null;
+  return `${((endMs - startMs) / 1000).toFixed(2)} seconds`;
+}
+
+function StatusBadge({ status }: { status: Inference["status"] }) {
+  const config = {
+    PENDING: {
+      label: "Pending",
+      classes: "bg-gray-100 text-gray-500",
+      Icon: Clock3,
+    },
+    PROCESSING: {
+      label: "Processing",
+      classes: "bg-blue-50 text-blue-700",
+      Icon: Loader2,
+    },
+    COMPLETED: {
+      label: "Completed",
+      classes: "bg-green-50 text-green-700",
+      Icon: CheckCircle2,
+    },
+    FAILED: {
+      label: "Failed",
+      classes: "bg-red-50 text-red-700",
+      Icon: XCircle,
+    },
+  } as const;
+
+  const { label, classes, Icon } = config[status];
+
+  return (
+    <span
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[8px] font-semibold ${classes}`}
+    >
+      <Icon
+        size={10}
+        className={status === "PROCESSING" ? "animate-spin" : ""}
+      />
+      {label}
+    </span>
+  );
+}
+
+function TriageBadge({ triage }: { triage: string }) {
+  const styles: Record<string, string> = {
+    high: "bg-red-50 text-red-700",
+    medium: "bg-amber-50 text-amber-700",
+    low: "bg-gray-100 text-gray-600",
+  };
+  const label = triage
+    ? `${triage.charAt(0).toUpperCase()}${triage.slice(1)} priority`
+    : "Unknown";
+
+  return (
+    <span
+      className={`rounded-md px-2 py-1 text-[8px] font-semibold ${styles[triage] ?? "bg-gray-100 text-gray-600"}`}
+    >
+      {label}
+    </span>
+  );
+}
 
 function ConfidenceBar({
   value,
@@ -71,7 +117,7 @@ function ConfidenceBar({
           "h-full rounded-full transition-all",
           selected ? "bg-gray-900" : "bg-gray-300",
         ].join(" ")}
-        style={{ width: `${value}%` }}
+        style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
       />
     </div>
   );
@@ -81,33 +127,125 @@ export function InferenceResult() {
   const navigate = useNavigate();
   const { inferenceId } = useParams();
 
-  const id = inferenceId ?? result.id;
+  const [inference, setInference] = useState<Inference | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const numericId = Number(inferenceId);
+
+    if (!inferenceId || Number.isNaN(numericId)) {
+      setError("Invalid inference ID.");
+      setIsLoading(false);
+      return;
+    }
+
+    let active = true;
+
+    async function load(showSpinner: boolean) {
+      if (showSpinner) setIsLoading(true);
+
+      try {
+        const data = await getInference(numericId);
+        if (!active) return;
+
+        setInference(data);
+        setError(null);
+
+        if (data.status === "PENDING" || data.status === "PROCESSING") {
+          if (!pollRef.current) {
+            pollRef.current = setInterval(() => load(false), POLL_INTERVAL_MS);
+          }
+        } else if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch (err) {
+        if (!active) return;
+
+        const maybeError = err as { response?: { status?: number } };
+        if (maybeError.response?.status === 404) {
+          setError("This inference could not be found.");
+        } else if (maybeError.response?.status === 403) {
+          setError("You do not have access to this inference.");
+        } else {
+          setError("Unable to load this inference. Please try again.");
+        }
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    }
+
+    load(true);
+
+    return () => {
+      active = false;
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [inferenceId]);
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-100 items-center justify-center">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+      </div>
+    );
+  }
+
+  if (error || !inference) {
+    return (
+      <div className="mx-auto max-w-360 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        <button
+          type="button"
+          onClick={() => navigate("/app/inference/history")}
+          className="mb-5 flex items-center gap-2 text-[11px] font-medium text-gray-500 hover:text-gray-900"
+        >
+          <ArrowLeft size={14} />
+          Back to inference history
+        </button>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+          <p className="text-[11px] font-semibold text-gray-700">
+            {error ?? "This inference could not be found."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const results = inference.response_payload?.results ?? [];
+  const topResult = inference.response_payload?.top_result;
+  const symptomEntries = Object.entries(
+    inference.request_payload?.symptoms ?? {},
+  );
+  const duration = formatDuration(inference.started_at, inference.completed_at);
 
   return (
     <div className="mx-auto max-w-360 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      {/* Back */}
       <button
         type="button"
         onClick={() =>
-          navigate(`/app/patients/${result.patientId}`)
+          inference.patient_id
+            ? navigate(`/app/patients/${inference.patient_id}`)
+            : navigate("/app/inference/history")
         }
         className="mb-5 flex items-center gap-2 text-[11px] font-medium text-gray-500 hover:text-gray-900"
       >
         <ArrowLeft size={14} />
-        Back to patient
+        {inference.patient_id ? "Back to patient" : "Back to inference history"}
       </button>
 
-      {/* Header */}
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1.5 rounded-md bg-green-50 px-2 py-1 text-[8px] font-semibold text-green-700">
-              <CheckCircle2 size={10} />
-              {result.status}
-            </span>
-
+            <StatusBadge status={inference.status} />
             <span className="font-mono text-[8px] text-gray-400">
-              {id}
+              INF-{inference.id}
             </span>
           </div>
 
@@ -116,476 +254,359 @@ export function InferenceResult() {
           </h1>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-gray-400">
-            <span>{result.model}</span>
+            <span>
+              {inference.inference_type === "IMAGE"
+                ? "Image-based"
+                : "Symptoms-based"}
+            </span>
             <span className="text-gray-200">•</span>
-            <span>{result.version}</span>
-            <span className="text-gray-200">•</span>
-            <span>{result.timestamp}</span>
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-[10px] font-semibold text-gray-600 hover:bg-gray-50"
-          >
-            <FileText size={13} />
-            Export report
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              navigate(
-                `/app/inference?patient=${result.patientId}`,
-              )
-            }
-            className="flex h-9 items-center gap-2 rounded-lg bg-gray-950 px-3.5 text-[10px] font-semibold text-white hover:bg-gray-800"
-          >
-            <Sparkles size={13} />
-            New inference
-          </button>
-        </div>
-      </div>
-
-      {/* Patient context */}
-      <section className="mb-5 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-[9px] font-semibold text-gray-700">
-            AM
-          </div>
-
-          <div>
-            <div className="text-[11px] font-semibold text-gray-900">
-              {result.patientName}
-            </div>
-
-            <div className="mt-0.5 flex items-center gap-2 text-[8px] text-gray-400">
-              <span className="font-mono">{result.patientId}</span>
-              <span>•</span>
-              <span>34 years</span>
-              <span>•</span>
-              <span>Female</span>
-            </div>
+            <span>{formatDateTime(inference.created_at)}</span>
           </div>
         </div>
 
         <button
           type="button"
           onClick={() =>
-            navigate(`/app/patients/${result.patientId}`)
+            navigate(
+              inference.patient_id
+                ? `/app/inference?patient=${inference.patient_id}`
+                : "/app/inference",
+            )
           }
-          className="flex items-center gap-1.5 text-[9px] font-semibold text-gray-500 hover:text-gray-900"
+          className="flex h-9 items-center gap-2 rounded-lg bg-gray-950 px-3.5 text-[10px] font-semibold text-white hover:bg-gray-800"
         >
-          <UserRound size={12} />
-          View patient record
+          <Sparkles size={13} />
+          New inference
         </button>
+      </div>
+
+      <section className="mb-5 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-400">
+            <UserRound size={14} />
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold text-gray-900">
+              {inference.patient_name}
+            </div>
+            {inference.patient_id && (
+              <div className="mt-0.5 font-mono text-[8px] text-gray-400">
+                {inference.patient_id}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {inference.patient_id && (
+          <button
+            type="button"
+            onClick={() => navigate(`/app/patients/${inference.patient_id}`)}
+            className="flex items-center gap-1.5 text-[9px] font-semibold text-gray-500 hover:text-gray-900"
+          >
+            <UserRound size={12} />
+            View patient record
+          </button>
+        )}
       </section>
 
-      {/* Main */}
-      <div className="grid gap-5 lg:grid-cols-[1fr_350px]">
-        <main className="space-y-5">
-          {/* Primary result */}
-          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <div className="flex items-center gap-2">
-                <BrainCircuit size={15} className="text-gray-400" />
-
-                <h2 className="text-[12px] font-semibold text-gray-950">
-                  Primary assessment
-                </h2>
-              </div>
+      {(inference.status === "PENDING" ||
+        inference.status === "PROCESSING") && (
+        <section className="mb-5 flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/50 p-5">
+          <Loader2 size={16} className="animate-spin text-blue-600" />
+          <div>
+            <div className="text-[10px] font-semibold text-blue-900">
+              {inference.status === "PENDING"
+                ? "Waiting to start"
+                : "Processing"}
             </div>
+            <p className="mt-0.5 text-[8px] text-blue-700">
+              This page will update automatically once the result is ready.
+            </p>
+          </div>
+        </section>
+      )}
 
-            <div className="p-5 sm:p-6">
-              <div className="grid gap-6 md:grid-cols-[1fr_180px] md:items-center">
-                <div>
-                  <div className="text-[9px] font-medium uppercase tracking-[0.12em] text-gray-400">
-                    Predicted finding
-                  </div>
+      {inference.status === "FAILED" && (
+        <section className="mb-5 flex items-start gap-3 rounded-xl border border-red-100 bg-red-50/50 p-5">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-600" />
+          <div>
+            <div className="text-[10px] font-semibold text-red-900">
+              Inference failed
+            </div>
+            <p className="mt-1 text-[8px] leading-4 text-red-700">
+              {inference.error_message ||
+                "The inference could not be completed."}
+            </p>
+          </div>
+        </section>
+      )}
 
-                  <div className="mt-2 text-[28px] font-semibold tracking-tight text-gray-950">
-                    {result.primaryFinding}
-                  </div>
-
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="rounded-md bg-amber-50 px-2 py-1 text-[8px] font-semibold text-amber-700">
-                      {result.risk}
-                    </span>
-
-                    <span className="text-[9px] text-gray-400">
-                      Model confidence
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex justify-center md:justify-end">
-                  <div className="relative flex h-36.25 w-36.25 items-center justify-center rounded-full border-10 border-gray-100">
-                    <div
-                      className="absolute -inset-2.5 rounded-full border-10 border-transparent"
-                      style={{
-                        clipPath:
-                          "polygon(0 0, 100% 0, 100% 100%, 0 100%)",
-                        borderTopColor: "#111827",
-                        borderRightColor: "#111827",
-                        transform: "rotate(35deg)",
-                      }}
-                    />
-
-                    <div className="text-center">
-                      <div className="text-[29px] font-semibold tracking-tight text-gray-950">
-                        {result.confidence}%
-                      </div>
-
-                      <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                        confidence
-                      </div>
-                    </div>
-                  </div>
+      {inference.status === "COMPLETED" && (
+        <div className="grid gap-5 lg:grid-cols-[1fr_350px]">
+          <main className="space-y-5">
+            <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+              <div className="border-b border-gray-100 px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit size={15} className="text-gray-400" />
+                  <h2 className="text-[12px] font-semibold text-gray-950">
+                    Primary assessment
+                  </h2>
                 </div>
               </div>
 
-              <div className="mt-7 rounded-lg bg-gray-50 p-4">
-                <div className="flex items-start gap-2.5">
-                  <Info
-                    size={13}
-                    className="mt-0.5 shrink-0 text-gray-400"
-                  />
-
+              <div className="p-5 sm:p-6">
+                <div className="grid gap-6 md:grid-cols-[1fr_180px] md:items-center">
                   <div>
-                    <div className="text-[9px] font-semibold text-gray-700">
-                      Interpretation
+                    <div className="text-[9px] font-medium uppercase tracking-[0.12em] text-gray-400">
+                      Predicted finding
                     </div>
-
-                    <p className="mt-1 text-[9px] leading-5 text-gray-500">
-                      The model identified a high probability of pneumonia
-                      based on the supplied clinical observations and
-                      medical image. This output is an AI-assisted
-                      prediction and should be evaluated alongside the
-                      patient's clinical presentation.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Prediction distribution */}
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <h2 className="text-[12px] font-semibold text-gray-950">
-                Prediction distribution
-              </h2>
-
-              <p className="mt-0.5 text-[9px] text-gray-400">
-                Model output across candidate classes
-              </p>
-            </div>
-
-            <div className="space-y-5 p-5">
-              {predictions.map((prediction) => (
-                <div key={prediction.label}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {prediction.selected && (
-                        <CheckCircle2
-                          size={12}
-                          className="text-gray-900"
-                        />
+                    <div className="mt-2 text-[28px] font-semibold tracking-tight text-gray-950">
+                      {inference.predicted_class || "No result"}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <TriageBadge triage={inference.overall_triage} />
+                      {topResult && (
+                        <span className="text-[9px] text-gray-400">
+                          {topResult.disease} · {topResult.model_used}
+                        </span>
                       )}
-
-                      <span className="text-[10px] font-medium text-gray-700">
-                        {prediction.label}
-                      </span>
                     </div>
-
-                    <span className="font-mono text-[9px] text-gray-500">
-                      {prediction.confidence.toFixed(1)}%
-                    </span>
                   </div>
 
-                  <ConfidenceBar
-                    value={prediction.confidence}
-                    selected={prediction.selected}
-                  />
+                  <div className="text-center md:text-right">
+                    <div className="text-[29px] font-semibold tracking-tight text-gray-950">
+                      {inference.confidence != null
+                        ? `${(inference.confidence * 100).toFixed(1)}%`
+                        : "—"}
+                    </div>
+                    <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                      confidence
+                    </div>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </section>
 
-          {/* Input data */}
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <div className="flex items-center gap-2">
-                <Layers3 size={14} className="text-gray-400" />
-
-                <h2 className="text-[12px] font-semibold text-gray-950">
-                  Inference inputs
-                </h2>
+                {inference.clinical_summary && (
+                  <div className="mt-7 rounded-lg bg-gray-50 p-4">
+                    <div className="flex items-start gap-2.5">
+                      <Info
+                        size={13}
+                        className="mt-0.5 shrink-0 text-gray-400"
+                      />
+                      <div>
+                        <div className="text-[9px] font-semibold text-gray-700">
+                          Clinical summary
+                        </div>
+                        <p className="mt-1 whitespace-pre-line text-[9px] leading-5 text-gray-500">
+                          {inference.clinical_summary}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
+            </section>
 
-            <div className="grid gap-5 p-5 md:grid-cols-2">
-              {/* Tabular */}
-              <div>
-                <div className="mb-3 flex items-center gap-2">
-                  <Table2 size={13} className="text-gray-400" />
-
-                  <span className="text-[9px] font-semibold text-gray-700">
-                    Clinical data
-                  </span>
+            {results.length > 0 && (
+              <section className="rounded-xl border border-gray-200 bg-white">
+                <div className="border-b border-gray-100 px-5 py-4">
+                  <h2 className="text-[12px] font-semibold text-gray-950">
+                    Model results
+                  </h2>
+                  <p className="mt-0.5 text-[9px] text-gray-400">
+                    Every model the router selected for this submission
+                  </p>
                 </div>
 
-                <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
-                  {observations.map(([label, value]) => (
-                    <div
-                      key={label}
-                      className="flex items-center justify-between px-3 py-2.5"
-                    >
-                      <span className="text-[8px] text-gray-400">
-                        {label}
-                      </span>
+                <div className="space-y-5 p-5">
+                  {results.map(
+                    (result: InferenceModelResult, index: number) => (
+                      <div key={`${result.disease}-${index}`}>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            {index === 0 && (
+                              <CheckCircle2
+                                size={12}
+                                className="text-gray-900"
+                              />
+                            )}
+                            <span className="text-[10px] font-medium text-gray-700">
+                              {result.disease} — {result.predicted_class}
+                            </span>
+                          </div>
+                          <span className="font-mono text-[9px] text-gray-500">
+                            {result.confidence_pct}
+                          </span>
+                        </div>
+                        <ConfidenceBar
+                          value={result.confidence * 100}
+                          selected={index === 0}
+                        />
+                        <div className="mt-1.5 flex items-center gap-2 text-[7px] text-gray-400">
+                          <span>{result.model_used}</span>
+                          <span>•</span>
+                          <TriageBadge triage={result.triage} />
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </section>
+            )}
 
+            {symptomEntries.length > 0 && (
+              <section className="rounded-xl border border-gray-200 bg-white">
+                <div className="border-b border-gray-100 px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <FileText size={14} className="text-gray-400" />
+                    <h2 className="text-[12px] font-semibold text-gray-950">
+                      Submitted clinical data
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="grid gap-x-6 gap-y-3 p-5 sm:grid-cols-2 md:grid-cols-3">
+                  {symptomEntries.map(([key, value]) => (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between gap-3 border-b border-gray-50 pb-2"
+                    >
+                      <span className="text-[8px] capitalize text-gray-400">
+                        {key.replace(/_/g, " ")}
+                      </span>
                       <span className="font-mono text-[9px] font-medium text-gray-700">
-                        {value}
+                        {String(value)}
                       </span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
+            )}
 
-              {/* Image */}
-              <div>
-                <div className="mb-3 flex items-center gap-2">
-                  <FileImage size={13} className="text-gray-400" />
-
-                  <span className="text-[9px] font-semibold text-gray-700">
-                    Medical image
-                  </span>
-                </div>
-
-                <div className="relative flex aspect-4/3 items-center justify-center overflow-hidden rounded-lg bg-gray-900">
-                  <div className="absolute inset-0 opacity-20">
-                    <div className="absolute left-1/4 top-1/2 h-32 w-20 -translate-y-1/2 rounded-[50%] border border-white" />
-                    <div className="absolute right-1/4 top-1/2 h-32 w-20 -translate-y-1/2 rounded-[50%] border border-white" />
-                  </div>
-
-                  <div className="relative text-center">
-                    <ImageIcon
-                      size={28}
-                      className="mx-auto text-gray-500"
-                    />
-
-                    <div className="mt-2 text-[8px] text-gray-500">
-                      Chest X-ray
-                    </div>
-                  </div>
-
-                  <div className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 font-mono text-[7px] text-gray-400">
-                    chest_xray_01842.png
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Technical details */}
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <h2 className="text-[12px] font-semibold text-gray-950">
-                Inference metadata
-              </h2>
-            </div>
-
-            <div className="grid gap-x-8 gap-y-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Engine
-                </div>
-
-                <div className="mt-1 text-[9px] font-medium text-gray-700">
-                  Multimodal Inference Engine
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Model version
-                </div>
-
-                <div className="mt-1 font-mono text-[9px] font-medium text-gray-700">
-                  {result.version}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Processing time
-                </div>
-
-                <div className="mt-1 flex items-center gap-1.5 text-[9px] font-medium text-gray-700">
-                  <Clock3 size={11} className="text-gray-400" />
-                  {result.duration}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Input modalities
-                </div>
-
-                <div className="mt-1 text-[9px] font-medium text-gray-700">
-                  Tabular + Image
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Inference ID
-                </div>
-
-                <div className="mt-1 font-mono text-[9px] font-medium text-gray-700">
-                  {id}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[8px] uppercase tracking-wide text-gray-400">
-                  Status
-                </div>
-
-                <div className="mt-1 flex items-center gap-1.5 text-[9px] font-medium text-green-700">
-                  <CheckCircle2 size={11} />
-                  Completed
-                </div>
-              </div>
-            </div>
-          </section>
-        </main>
-
-        {/* Right rail */}
-        <aside className="space-y-5">
-          {/* Review */}
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <h2 className="text-[12px] font-semibold text-gray-950">
-                Clinical review
-              </h2>
-            </div>
-
-            <div className="p-5">
-              <div className="rounded-lg border border-amber-100 bg-amber-50/50 p-3.5">
-                <div className="flex items-start gap-2.5">
-                  <AlertTriangle
-                    size={14}
-                    className="mt-0.5 shrink-0 text-amber-600"
-                  />
-
-                  <div>
-                    <div className="text-[10px] font-semibold text-amber-900">
-                      Review required
-                    </div>
-
-                    <p className="mt-1 text-[8px] leading-4 text-amber-800/70">
-                      This result has not yet been reviewed by a clinician.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-gray-950 text-[9px] font-semibold text-white hover:bg-gray-800"
-              >
-                <CheckCircle2 size={12} />
-                Mark as reviewed
-              </button>
-            </div>
-          </section>
-
-          {/* Model */}
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-5 py-4">
-              <h2 className="text-[12px] font-semibold text-gray-950">
-                Model information
-              </h2>
-            </div>
-
-            <div className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-950 text-white">
-                  <BrainCircuit size={15} />
-                </div>
-
-                <div>
-                  <div className="text-[10px] font-semibold text-gray-800">
-                    {result.model}
-                  </div>
-
-                  <div className="mt-0.5 font-mono text-[8px] text-gray-400">
-                    {result.version}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[8px] text-gray-400">
-                    Modality
-                  </span>
-
-                  <span className="text-[9px] font-medium text-gray-700">
-                    Multimodal
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-[8px] text-gray-400">
-                    Model status
-                  </span>
-
-                  <span className="flex items-center gap-1 text-[9px] font-medium text-green-700">
-                    <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                    Production
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-[8px] text-gray-400">
-                    Calibration
-                  </span>
-
-                  <span className="text-[9px] font-medium text-gray-700">
-                    Verified
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Safety */}
-          <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
-            <div className="flex items-start gap-2.5">
-              <ShieldCheck
-                size={14}
-                className="mt-0.5 shrink-0 text-gray-500"
-              />
-
-              <div>
+            {inference.request_payload?.clinical_notes && (
+              <section className="rounded-xl border border-gray-200 bg-white p-5">
                 <div className="text-[9px] font-semibold text-gray-700">
-                  Decision support only
+                  Clinical notes
                 </div>
-
-                <p className="mt-1 text-[8px] leading-4 text-gray-500">
-                  This prediction does not constitute a medical diagnosis.
-                  A qualified healthcare professional must interpret the
-                  result in clinical context.
+                <p className="mt-2 text-[9px] leading-5 text-gray-500">
+                  {inference.request_payload.clinical_notes}
                 </p>
+              </section>
+            )}
+
+            <section className="rounded-xl border border-gray-200 bg-white">
+              <div className="border-b border-gray-100 px-5 py-4">
+                <h2 className="text-[12px] font-semibold text-gray-950">
+                  Inference metadata
+                </h2>
               </div>
-            </div>
-          </section>
-        </aside>
-      </div>
+
+              <div className="grid gap-x-8 gap-y-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Inference ID
+                  </div>
+                  <div className="mt-1 font-mono text-[9px] font-medium text-gray-700">
+                    INF-{inference.id}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Models run
+                  </div>
+                  <div className="mt-1 text-[9px] font-medium text-gray-700">
+                    {(inference.response_payload?.models_run ?? []).join(
+                      ", ",
+                    ) || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Processing time
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5 text-[9px] font-medium text-gray-700">
+                    <Clock3 size={11} className="text-gray-400" />
+                    {duration ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Started
+                  </div>
+                  <div className="mt-1 text-[9px] font-medium text-gray-700">
+                    {formatDateTime(inference.started_at)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Completed
+                  </div>
+                  <div className="mt-1 text-[9px] font-medium text-gray-700">
+                    {formatDateTime(inference.completed_at)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wide text-gray-400">
+                    Status
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5 text-[9px] font-medium text-green-700">
+                    <CheckCircle2 size={11} />
+                    Completed
+                  </div>
+                </div>
+              </div>
+            </section>
+          </main>
+
+          <aside className="space-y-5">
+            <section className="rounded-xl border border-gray-200 bg-white">
+              <div className="border-b border-gray-100 px-5 py-4">
+                <h2 className="text-[12px] font-semibold text-gray-950">
+                  Models skipped
+                </h2>
+              </div>
+              <div className="p-5">
+                {(inference.response_payload?.models_skipped ?? []).length ===
+                0 ? (
+                  <p className="text-[8px] text-gray-400">
+                    All applicable models ran.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {(inference.response_payload?.models_skipped ?? []).map(
+                      (entry) => (
+                        <li
+                          key={entry}
+                          className="text-[8px] leading-4 text-gray-500"
+                        >
+                          {entry}
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
+              <div className="flex items-start gap-2.5">
+                <ShieldCheck
+                  size={14}
+                  className="mt-0.5 shrink-0 text-gray-500"
+                />
+                <div>
+                  <div className="text-[9px] font-semibold text-gray-700">
+                    Decision support only
+                  </div>
+                  <p className="mt-1 text-[8px] leading-4 text-gray-500">
+                    {inference.response_payload?.disclaimer ??
+                      "This prediction does not constitute a medical diagnosis. A qualified healthcare professional must interpret the result in clinical context."}
+                  </p>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

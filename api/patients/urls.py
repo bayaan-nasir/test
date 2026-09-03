@@ -15,7 +15,7 @@ urlpatterns = [
         name="patient-list-create",
     ),
     path(
-        "<int:pk>/",
+        "<str:patient_id>/",
         PatientDetailView.as_view(),
         name="patient-detail",
     ),

@@ -2,7 +2,6 @@ import {
   Activity,
   ChevronRight,
   CircleUserRound,
-  Filter,
   Plus,
   Search,
   SlidersHorizontal,
@@ -16,7 +15,7 @@ import {
   getPatients,
   type CreatePatientPayload,
   type Patient as ApiPatient,
-} from "../../api/inference";
+} from "../../api/patients";
 
 type PatientStatus = "Active" | "Needs review" | "Inactive";
 
@@ -31,6 +30,38 @@ function formatDate(dateValue?: string | null) {
     year: "numeric",
   });
 }
+
+function getPageNumbers(
+  current: number,
+  total: number,
+): (number | "ellipsis")[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+
+  const pages: (number | "ellipsis")[] = [1];
+
+  if (current > 3) {
+    pages.push("ellipsis");
+  }
+
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+
+  for (let i = start; i <= end; i += 1) {
+    pages.push(i);
+  }
+
+  if (current < total - 2) {
+    pages.push("ellipsis");
+  }
+
+  pages.push(total);
+
+  return pages;
+}
+
+const PATIENTS_PER_PAGE = 10;
 
 function StatusBadge({ status }: { status: PatientStatus }) {
   const styles = {
@@ -60,6 +91,7 @@ function StatusBadge({ status }: { status: PatientStatus }) {
 export function Patients() {
   const navigate = useNavigate();
   const [patients, setPatients] = useState<ApiPatient[]>([]);
+  const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"All" | PatientStatus>("All");
   const [showFilters, setShowFilters] = useState(false);
@@ -122,6 +154,30 @@ export function Patients() {
       return matchesSearch && matchesStatus;
     });
   }, [patients, search, status]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredPatients.length / PATIENTS_PER_PAGE),
+  );
+
+  const paginatedPatients = useMemo(
+    () =>
+      filteredPatients.slice(
+        (page - 1) * PATIENTS_PER_PAGE,
+        page * PATIENTS_PER_PAGE,
+      ),
+    [filteredPatients, page],
+  );
+
+  // Reset to page 1 whenever the filters change the result set
+  useEffect(() => {
+    setPage(1);
+  }, [search, status]);
+
+  // Clamp page if it becomes out of range (e.g. after a filter shrinks the list)
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   if (loading) {
     return <div className="p-8 text-sm text-gray-500">Loading patients…</div>;
@@ -317,14 +373,6 @@ export function Patients() {
               <SlidersHorizontal size={12} />
               Filters
             </button>
-
-            <button
-              type="button"
-              className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-[9px] font-medium text-gray-500 hover:bg-gray-50"
-            >
-              <Filter size={12} />
-              More
-            </button>
           </div>
         </div>
 
@@ -385,7 +433,7 @@ export function Patients() {
             </thead>
 
             <tbody className="divide-y divide-gray-100">
-              {filteredPatients.map((patient) => {
+              {paginatedPatients.map((patient) => {
                 const fullName =
                   patient.full_name ??
                   `${patient.first_name} ${patient.last_name}`;
@@ -470,7 +518,7 @@ export function Patients() {
         </div>
 
         <div className="divide-y divide-gray-100 lg:hidden">
-          {filteredPatients.map((patient) => {
+          {paginatedPatients.map((patient) => {
             const fullName =
               patient.full_name ?? `${patient.first_name} ${patient.last_name}`;
 
@@ -534,7 +582,7 @@ export function Patients() {
           })}
         </div>
 
-        {filteredPatients.length === 0 && (
+        {paginatedPatients.length === 0 && (
           <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
               <Search size={16} className="text-gray-400" />
@@ -550,41 +598,64 @@ export function Patients() {
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-gray-100 px-5 py-3">
+        <div className="flex flex-col gap-3 border-t border-gray-100 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
           <span className="text-[8px] text-gray-400">
-            Showing {filteredPatients.length} patients
+            {filteredPatients.length === 0
+              ? "Showing 0 patients"
+              : `Showing ${(page - 1) * PATIENTS_PER_PAGE + 1}-${Math.min(
+                  page * PATIENTS_PER_PAGE,
+                  filteredPatients.length,
+                )} of ${filteredPatients.length} patients`}
           </span>
 
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled
-              className="rounded-md border border-gray-200 px-2.5 py-1.5 text-[8px] text-gray-300"
-            >
-              Previous
-            </button>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                className="rounded-md border border-gray-200 px-2.5 py-1.5 text-[8px] text-gray-500 hover:enabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+              >
+                Previous
+              </button>
 
-            <button
-              type="button"
-              className="rounded-md bg-gray-900 px-2.5 py-1.5 text-[8px] font-medium text-white"
-            >
-              1
-            </button>
+              {getPageNumbers(page, totalPages).map((item, index) =>
+                item === "ellipsis" ? (
+                  <span
+                    key={`ellipsis-${index}`}
+                    className="px-1.5 text-[8px] text-gray-300"
+                  >
+                    …
+                  </span>
+                ) : (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setPage(item)}
+                    className={[
+                      "rounded-md px-2.5 py-1.5 text-[8px] font-medium",
+                      item === page
+                        ? "bg-gray-900 text-white"
+                        : "border border-gray-200 text-gray-500 hover:bg-gray-50",
+                    ].join(" ")}
+                  >
+                    {item}
+                  </button>
+                ),
+              )}
 
-            <button
-              type="button"
-              className="rounded-md border border-gray-200 px-2.5 py-1.5 text-[8px] text-gray-500"
-            >
-              2
-            </button>
-
-            <button
-              type="button"
-              className="rounded-md border border-gray-200 px-2.5 py-1.5 text-[8px] text-gray-500"
-            >
-              Next
-            </button>
-          </div>
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() =>
+                  setPage((current) => Math.min(totalPages, current + 1))
+                }
+                className="rounded-md border border-gray-200 px-2.5 py-1.5 text-[8px] text-gray-500 hover:enabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

@@ -1,400 +1,297 @@
 import {
   Activity,
-  ArrowUpDown,
   BrainCircuit,
-  CalendarDays,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Eye,
-  Filter,
-  Image as ImageIcon,
-  Layers3,
+  Loader2,
+  RefreshCw,
   Search,
-  Table2,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type Status = "Completed" | "Review required" | "Failed";
-type Modality = "Multimodal" | "Image" | "Tabular";
+import { getInferences, type Inference } from "../../api/inference";
 
-interface Inference {
-  id: string;
-  patientId: string;
-  patient: string;
-  model: string;
-  modality: Modality;
-  result: string;
-  confidence: number;
-  status: Status;
-  date: string;
-  time: string;
-  duration: string;
+type StatusFilter = "All" | Inference["status"];
+type TypeFilter = "All" | Inference["inference_type"];
+
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
-const inferences: Inference[] = [
-  {
-    id: "INF-7F82A1",
-    patientId: "PT-10482",
-    patient: "Ama Mensah",
-    model: "Respiratory Assessment",
-    modality: "Multimodal",
-    result: "Pneumonia",
-    confidence: 94.7,
-    status: "Review required",
-    date: "29 Aug 2026",
-    time: "14:32",
-    duration: "2.84s",
-  },
-  {
-    id: "INF-6D91C4",
-    patientId: "PT-10371",
-    patient: "Kwame Asante",
-    model: "Chest X-Ray Classifier",
-    modality: "Image",
-    result: "Normal",
-    confidence: 96.2,
-    status: "Completed",
-    date: "29 Aug 2026",
-    time: "13:18",
-    duration: "1.42s",
-  },
-  {
-    id: "INF-5A27E9",
-    patientId: "PT-10298",
-    patient: "Abena Owusu",
-    model: "Cardiovascular Risk",
-    modality: "Tabular",
-    result: "Low risk",
-    confidence: 88.4,
-    status: "Completed",
-    date: "29 Aug 2026",
-    time: "11:46",
-    duration: "0.82s",
-  },
-  {
-    id: "INF-4C83B2",
-    patientId: "PT-10411",
-    patient: "Kofi Boateng",
-    model: "Respiratory Assessment",
-    modality: "Multimodal",
-    result: "Other abnormality",
-    confidence: 79.1,
-    status: "Review required",
-    date: "28 Aug 2026",
-    time: "16:07",
-    duration: "3.16s",
-  },
-  {
-    id: "INF-3B61D8",
-    patientId: "PT-10187",
-    patient: "Akosua Addo",
-    model: "Chest X-Ray Classifier",
-    modality: "Image",
-    result: "Abnormal finding",
-    confidence: 91.4,
-    status: "Completed",
-    date: "28 Aug 2026",
-    time: "12:34",
-    duration: "1.63s",
-  },
-  {
-    id: "INF-2E48F5",
-    patientId: "PT-10042",
-    patient: "Yaw Mensima",
-    model: "Cardiovascular Risk",
-    modality: "Tabular",
-    result: "Moderate risk",
-    confidence: 73.8,
-    status: "Completed",
-    date: "27 Aug 2026",
-    time: "15:21",
-    duration: "0.91s",
-  },
-  {
-    id: "INF-1A39C7",
-    patientId: "PT-10304",
-    patient: "Esi Ofori",
-    model: "Respiratory Assessment",
-    modality: "Multimodal",
-    result: "Pneumonia",
-    confidence: 89.6,
-    status: "Completed",
-    date: "27 Aug 2026",
-    time: "09:52",
-    duration: "2.71s",
-  },
-  {
-    id: "INF-0D72A4",
-    patientId: "PT-10221",
-    patient: "Nana Adjei",
-    model: "Chest X-Ray Classifier",
-    modality: "Image",
-    result: "Processing failed",
-    confidence: 0,
-    status: "Failed",
-    date: "26 Aug 2026",
-    time: "17:03",
-    duration: "0.38s",
-  },
-];
+function formatTime(value?: string | null) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
-const modalityIcons = {
-  Multimodal: Layers3,
-  Image: ImageIcon,
-  Tabular: Table2,
-};
+function getDurationSeconds(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs)
+    return null;
+  return (endMs - startMs) / 1000;
+}
 
-function StatusBadge({ status }: { status: Status }) {
-  if (status === "Completed") {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md bg-green-50 px-2 py-1 text-[8px] font-semibold text-green-700">
-        <CheckCircle2 size={9} />
-        Completed
-      </span>
-    );
-  }
+function StatusBadge({ status }: { status: Inference["status"] }) {
+  const config = {
+    PENDING: {
+      label: "Pending",
+      classes: "bg-gray-100 text-gray-500",
+      Icon: Clock3,
+    },
+    PROCESSING: {
+      label: "Processing",
+      classes: "bg-blue-50 text-blue-700",
+      Icon: Loader2,
+    },
+    COMPLETED: {
+      label: "Completed",
+      classes: "bg-green-50 text-green-700",
+      Icon: CheckCircle2,
+    },
+    FAILED: {
+      label: "Failed",
+      classes: "bg-red-50 text-red-700",
+      Icon: XCircle,
+    },
+  } as const;
 
-  if (status === "Review required") {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-[8px] font-semibold text-amber-700">
-        <Clock3 size={9} />
-        Review required
-      </span>
-    );
-  }
+  const { label, classes, Icon } = config[status];
 
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md bg-red-50 px-2 py-1 text-[8px] font-semibold text-red-700">
-      <XCircle size={9} />
-      Failed
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[8px] font-semibold ${classes}`}
+    >
+      <Icon
+        size={9}
+        className={status === "PROCESSING" ? "animate-spin" : ""}
+      />
+      {label}
     </span>
   );
 }
 
-function ModalityBadge({ modality }: { modality: Modality }) {
-  const Icon = modalityIcons[modality];
-
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[8px] font-medium text-gray-500">
-      <Icon size={11} className="text-gray-400" />
-      {modality}
-    </span>
-  );
-}
+const PAGE_SIZE = 10;
 
 export function InferenceHistory() {
   const navigate = useNavigate();
 
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<"All" | Status>("All");
-  const [modality, setModality] = useState<"All" | Modality>("All");
-  const [showFilters, setShowFilters] = useState(false);
-  const [sortDescending, setSortDescending] = useState(true);
+  const [inferences, setInferences] = useState<Inference[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filteredInferences = useMemo(() => {
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("All");
+  const [type, setType] = useState<TypeFilter>("All");
+  const [showFilters, setShowFilters] = useState(false);
+  const [page, setPage] = useState(1);
+
+  const loadInferences = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await getInferences();
+      setInferences(data);
+    } catch {
+      setError("Unable to load inference history. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadInferences();
+  }, []);
+
+  const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    const filtered = inferences.filter((item) => {
+    return inferences.filter((item) => {
       const matchesSearch =
         !query ||
-        item.patient.toLowerCase().includes(query) ||
-        item.patientId.toLowerCase().includes(query) ||
-        item.model.toLowerCase().includes(query) ||
-        item.result.toLowerCase().includes(query) ||
-        item.id.toLowerCase().includes(query);
+        item.patient_name.toLowerCase().includes(query) ||
+        (item.patient_id ?? "").toLowerCase().includes(query) ||
+        item.predicted_class.toLowerCase().includes(query) ||
+        `inf-${item.id}`.includes(query);
 
-      const matchesStatus =
-        status === "All" || item.status === status;
+      const matchesStatus = status === "All" || item.status === status;
+      const matchesType = type === "All" || item.inference_type === type;
 
-      const matchesModality =
-        modality === "All" || item.modality === modality;
-
-      return matchesSearch && matchesStatus && matchesModality;
+      return matchesSearch && matchesStatus && matchesType;
     });
+  }, [inferences, search, status, type]);
 
-    return sortDescending ? filtered : [...filtered].reverse();
-  }, [search, status, modality, sortDescending]);
+  useEffect(() => {
+    setPage(1);
+  }, [search, status, type]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const stats = useMemo(() => {
+    const total = inferences.length;
+    const completed = inferences.filter((i) => i.status === "COMPLETED").length;
+    const inProgress = inferences.filter(
+      (i) => i.status === "PENDING" || i.status === "PROCESSING",
+    ).length;
+    const durations = inferences
+      .map((i) => getDurationSeconds(i.started_at, i.completed_at))
+      .filter((d): d is number => d !== null);
+    const avgDuration =
+      durations.length > 0
+        ? durations.reduce((a, b) => a + b, 0) / durations.length
+        : null;
+
+    return { total, completed, inProgress, avgDuration };
+  }, [inferences]);
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-100 items-center justify-center">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-360 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      {/* Header */}
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.14em] text-blue-600">
             <BrainCircuit size={11} />
             AI Inference Engine
           </div>
-
           <h1 className="mt-2 text-[25px] font-semibold tracking-tight text-gray-950 sm:text-[29px]">
             Inference history
           </h1>
-
           <p className="mt-1 max-w-xl text-[10px] leading-5 text-gray-400">
-            Review previous model runs, predictions, confidence scores,
-            and clinical review status.
+            Review previous model runs, predictions, confidence scores, and
+            status.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => navigate("/app/inference")}
-          className="flex h-9 items-center justify-center gap-2 rounded-lg bg-gray-950 px-3.5 text-[10px] font-semibold text-white hover:bg-gray-800"
-        >
-          <Activity size={13} />
-          New inference
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={loadInferences}
+            className="flex h-9 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3.5 text-[10px] font-medium text-gray-500 hover:bg-gray-50"
+          >
+            <RefreshCw size={13} />
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/app/inference")}
+            className="flex h-9 items-center justify-center gap-2 rounded-lg bg-gray-950 px-3.5 text-[10px] font-semibold text-white hover:bg-gray-800"
+          >
+            <Activity size={13} />
+            New inference
+          </button>
+        </div>
       </div>
 
-      {/* Stats */}
+      {error && (
+        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[9px] text-red-700">
+          {error}
+        </div>
+      )}
+
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
             Total inferences
           </div>
-
           <div className="mt-2 text-[21px] font-semibold tracking-tight text-gray-950">
-            1,284
-          </div>
-
-          <div className="mt-1 text-[8px] text-gray-400">
-            Last 30 days
+            {stats.total}
           </div>
         </div>
-
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
             Completed
           </div>
-
           <div className="mt-2 text-[21px] font-semibold tracking-tight text-gray-950">
-            1,247
-          </div>
-
-          <div className="mt-1 text-[8px] text-green-600">
-            97.1% success rate
+            {stats.completed}
           </div>
         </div>
-
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
-            Awaiting review
+            In progress
           </div>
-
           <div className="mt-2 text-[21px] font-semibold tracking-tight text-gray-950">
-            23
-          </div>
-
-          <div className="mt-1 text-[8px] text-amber-600">
-            Requires attention
+            {stats.inProgress}
           </div>
         </div>
-
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <div className="text-[8px] font-semibold uppercase tracking-wide text-gray-400">
             Avg. processing
           </div>
-
           <div className="mt-2 text-[21px] font-semibold tracking-tight text-gray-950">
-            1.84s
-          </div>
-
-          <div className="mt-1 text-[8px] text-gray-400">
-            Across all models
+            {stats.avgDuration !== null
+              ? `${stats.avgDuration.toFixed(2)}s`
+              : "—"}
           </div>
         </div>
       </div>
 
-      {/* Table */}
       <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-        {/* Toolbar */}
         <div className="flex flex-col gap-3 border-b border-gray-100 p-4 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1 lg:max-w-95">
             <Search
               size={14}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300"
             />
-
             <input
               type="text"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search patient, model, result..."
-              className="h-9 w-full rounded-lg border border-gray-200 bg-gray-50/50 pl-9 pr-8 text-[9px] text-gray-700 outline-none placeholder:text-gray-300 focus:border-gray-300 focus:bg-white"
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search patient, prediction, INF-ID..."
+              className="h-9 w-full rounded-lg border border-gray-200 bg-gray-50/50 pl-9 pr-3 text-[9px] text-gray-700 outline-none placeholder:text-gray-300 focus:border-gray-300 focus:bg-white"
             />
-
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100"
-              >
-                <XCircle size={11} />
-              </button>
-            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowFilters((value) => !value)}
-              className={[
-                "flex h-9 items-center gap-2 rounded-lg border px-3 text-[9px] font-medium",
-                showFilters ||
-                  status !== "All" ||
-                  modality !== "All"
-                  ? "border-gray-300 bg-gray-50 text-gray-900"
-                  : "border-gray-200 text-gray-500 hover:bg-gray-50",
-              ].join(" ")}
-            >
-              <Filter size={12} />
-              Filters
-
-              {(status !== "All" || modality !== "All") && (
-                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-gray-900 px-1 text-[7px] text-white">
-                  {(status !== "All" ? 1 : 0) +
-                    (modality !== "All" ? 1 : 0)}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSortDescending((value) => !value)}
-              className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-[9px] font-medium text-gray-500 hover:bg-gray-50"
-            >
-              <ArrowUpDown size={12} />
-              Date
-            </button>
-
-            <button
-              type="button"
-              className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-[9px] font-medium text-gray-500 hover:bg-gray-50"
-            >
-              <CalendarDays size={12} />
-              Date range
-              <ChevronDown size={11} />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowFilters((v) => !v)}
+            className={[
+              "flex h-9 items-center gap-2 rounded-lg border px-3 text-[9px] font-medium",
+              showFilters || status !== "All" || type !== "All"
+                ? "border-gray-300 bg-gray-50 text-gray-900"
+                : "border-gray-200 text-gray-500 hover:bg-gray-50",
+            ].join(" ")}
+          >
+            Filters
+          </button>
         </div>
 
-        {/* Filters */}
         {showFilters && (
           <div className="grid gap-4 border-b border-gray-100 bg-gray-50/50 p-4 sm:grid-cols-2">
             <div>
               <div className="mb-2 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                 Status
               </div>
-
               <div className="flex flex-wrap gap-1.5">
                 {(
                   [
                     "All",
-                    "Completed",
-                    "Review required",
-                    "Failed",
+                    "PENDING",
+                    "PROCESSING",
+                    "COMPLETED",
+                    "FAILED",
                   ] as const
                 ).map((item) => (
                   <button
@@ -408,7 +305,9 @@ export function InferenceHistory() {
                         : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-50",
                     ].join(" ")}
                   >
-                    {item}
+                    {item === "All"
+                      ? "All"
+                      : item.charAt(0) + item.slice(1).toLowerCase()}
                   </button>
                 ))}
               </div>
@@ -416,25 +315,26 @@ export function InferenceHistory() {
 
             <div>
               <div className="mb-2 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
-                Modality
+                Type
               </div>
-
               <div className="flex flex-wrap gap-1.5">
-                {(
-                  ["All", "Multimodal", "Image", "Tabular"] as const
-                ).map((item) => (
+                {(["All", "SYMPTOMS", "IMAGE"] as const).map((item) => (
                   <button
                     key={item}
                     type="button"
-                    onClick={() => setModality(item)}
+                    onClick={() => setType(item)}
                     className={[
                       "rounded-md px-2.5 py-1.5 text-[8px] font-medium",
-                      modality === item
+                      type === item
                         ? "bg-gray-900 text-white"
                         : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-50",
                     ].join(" ")}
                   >
-                    {item}
+                    {item === "All"
+                      ? "All"
+                      : item === "SYMPTOMS"
+                        ? "Symptoms"
+                        : "Image"}
                   </button>
                 ))}
               </div>
@@ -442,7 +342,6 @@ export function InferenceHistory() {
           </div>
         )}
 
-        {/* Desktop table */}
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-225">
             <thead>
@@ -450,112 +349,85 @@ export function InferenceHistory() {
                 <th className="px-5 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                   Patient
                 </th>
-
                 <th className="px-4 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
-                  Model
+                  Type
                 </th>
-
                 <th className="px-4 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                   Prediction
                 </th>
-
                 <th className="px-4 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                   Confidence
                 </th>
-
                 <th className="px-4 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                   Status
                 </th>
-
                 <th className="px-4 py-3 text-[8px] font-semibold uppercase tracking-wide text-gray-400">
                   Date
                 </th>
-
                 <th className="w-10 px-3 py-3" />
               </tr>
             </thead>
-
             <tbody className="divide-y divide-gray-100">
-              {filteredInferences.map((item) => (
+              {paginated.map((item) => (
                 <tr
                   key={item.id}
-                  onClick={() =>
-                    navigate(`/app/inference/${item.id}`)
-                  }
+                  onClick={() => navigate(`/app/inference/${item.id}`)}
                   className="group cursor-pointer transition hover:bg-gray-50/70"
                 >
                   <td className="px-5 py-3.5">
                     <div className="text-[10px] font-semibold text-gray-800">
-                      {item.patient}
+                      {item.patient_name}
                     </div>
-
-                    <div className="mt-1 font-mono text-[8px] text-gray-400">
-                      {item.patientId}
-                    </div>
+                    {item.patient_id && (
+                      <div className="mt-1 font-mono text-[8px] text-gray-400">
+                        {item.patient_id}
+                      </div>
+                    )}
                   </td>
-
-                  <td className="px-4 py-3.5">
-                    <div className="text-[9px] font-medium text-gray-700">
-                      {item.model}
-                    </div>
-
-                    <div className="mt-1">
-                      <ModalityBadge modality={item.modality} />
-                    </div>
+                  <td className="px-4 py-3.5 text-[9px] text-gray-600">
+                    {item.inference_type === "IMAGE" ? "Image" : "Symptoms"}
                   </td>
-
                   <td className="px-4 py-3.5">
                     <div className="text-[9px] font-semibold text-gray-800">
-                      {item.result}
+                      {item.predicted_class || "—"}
                     </div>
-
                     <div className="mt-1 font-mono text-[8px] text-gray-400">
-                      {item.id}
+                      INF-{item.id}
                     </div>
                   </td>
-
                   <td className="px-4 py-3.5">
-                    {item.status === "Failed" ? (
-                      <span className="text-[9px] text-gray-300">
-                        —
-                      </span>
+                    {item.confidence == null ? (
+                      <span className="text-[9px] text-gray-300">—</span>
                     ) : (
                       <div className="flex items-center gap-2">
                         <div className="h-1 w-14 overflow-hidden rounded-full bg-gray-100">
                           <div
                             className="h-full rounded-full bg-gray-800"
-                            style={{
-                              width: `${item.confidence}%`,
-                            }}
+                            style={{ width: `${item.confidence * 100}%` }}
                           />
                         </div>
-
                         <span className="font-mono text-[8px] text-gray-500">
-                          {item.confidence.toFixed(1)}%
+                          {(item.confidence * 100).toFixed(1)}%
                         </span>
                       </div>
                     )}
                   </td>
-
                   <td className="px-4 py-3.5">
                     <StatusBadge status={item.status} />
                   </td>
-
                   <td className="px-4 py-3.5">
                     <div className="text-[9px] text-gray-600">
-                      {item.date}
+                      {formatDate(item.created_at)}
                     </div>
-
                     <div className="mt-1 text-[8px] text-gray-400">
-                      {item.time} · {item.duration}
+                      {formatTime(item.created_at)}
                     </div>
                   </td>
-
                   <td className="px-3 py-3.5">
                     <button
                       type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
+                      onClick={(e) => {
+                        e.stopPropagation();
                         navigate(`/app/inference/${item.id}`);
                       }}
                       className="flex h-7 w-7 items-center justify-center rounded-md text-gray-300 opacity-0 transition group-hover:opacity-100 hover:bg-gray-100 hover:text-gray-700"
@@ -570,83 +442,57 @@ export function InferenceHistory() {
           </table>
         </div>
 
-        {/* Mobile cards */}
         <div className="divide-y divide-gray-100 lg:hidden">
-          {filteredInferences.map((item) => (
+          {paginated.map((item) => (
             <button
               key={item.id}
               type="button"
-              onClick={() =>
-                navigate(`/app/inference/${item.id}`)
-              }
+              onClick={() => navigate(`/app/inference/${item.id}`)}
               className="block w-full p-4 text-left transition hover:bg-gray-50"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[10px] font-semibold text-gray-800">
-                    {item.patient}
+                    {item.patient_name}
                   </div>
-
-                  <div className="mt-1 font-mono text-[8px] text-gray-400">
-                    {item.patientId}
-                  </div>
+                  {item.patient_id && (
+                    <div className="mt-1 font-mono text-[8px] text-gray-400">
+                      {item.patient_id}
+                    </div>
+                  )}
                 </div>
-
                 <StatusBadge status={item.status} />
               </div>
 
-              <div className="mt-4 flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100">
-                  {(() => {
-                    const Icon = modalityIcons[item.modality];
-
-                    return (
-                      <Icon size={12} className="text-gray-500" />
-                    );
-                  })()}
-                </div>
-
-                <div>
-                  <div className="text-[9px] font-medium text-gray-700">
-                    {item.model}
-                  </div>
-
-                  <div className="mt-0.5 text-[8px] text-gray-400">
-                    {item.result}
-                  </div>
-                </div>
+              <div className="mt-3 text-[9px] font-medium text-gray-700">
+                {item.predicted_class || "—"}
               </div>
 
-              <div className="mt-4 grid grid-cols-3 gap-3 border-t border-gray-100 pt-3">
+              <div className="mt-3 grid grid-cols-3 gap-3 border-t border-gray-100 pt-3">
                 <div>
                   <div className="text-[7px] uppercase tracking-wide text-gray-400">
                     Confidence
                   </div>
-
                   <div className="mt-1 font-mono text-[9px] text-gray-700">
-                    {item.status === "Failed"
+                    {item.confidence == null
                       ? "—"
-                      : `${item.confidence.toFixed(1)}%`}
+                      : `${(item.confidence * 100).toFixed(1)}%`}
                   </div>
                 </div>
-
                 <div>
                   <div className="text-[7px] uppercase tracking-wide text-gray-400">
                     Date
                   </div>
-
                   <div className="mt-1 text-[8px] text-gray-700">
-                    {item.date}
+                    {formatDate(item.created_at)}
                   </div>
                 </div>
-
                 <div>
                   <div className="text-[7px] uppercase tracking-wide text-gray-400">
-                    Duration
+                    Type
                   </div>
-
-                  <div className="mt-1 font-mono text-[8px] text-gray-700">
-                    {item.duration}
+                  <div className="mt-1 text-[8px] text-gray-700">
+                    {item.inference_type === "IMAGE" ? "Image" : "Symptoms"}
                   </div>
                 </div>
               </div>
@@ -654,68 +500,50 @@ export function InferenceHistory() {
           ))}
         </div>
 
-        {/* Empty state */}
-        {filteredInferences.length === 0 && (
+        {filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
               <Search size={16} className="text-gray-400" />
             </div>
-
             <div className="mt-4 text-[11px] font-semibold text-gray-700">
               No inferences found
             </div>
-
             <p className="mt-1 max-w-xs text-[9px] leading-4 text-gray-400">
-              Try changing your search or removing one of the active
-              filters.
+              Try changing your search or removing one of the active filters.
             </p>
           </div>
         )}
 
-        {/* Footer */}
-        {filteredInferences.length > 0 && (
+        {filtered.length > 0 && (
           <div className="flex flex-col gap-2 border-t border-gray-100 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-[8px] text-gray-400">
-              Showing {filteredInferences.length} of 1,284 inferences
+              Showing {(page - 1) * PAGE_SIZE + 1}-
+              {Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
             </span>
 
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                disabled
-                className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-300"
-              >
-                Previous
-              </button>
-
-              <button
-                type="button"
-                className="h-7 rounded-md bg-gray-900 px-2.5 text-[8px] font-medium text-white"
-              >
-                1
-              </button>
-
-              <button
-                type="button"
-                className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-500 hover:bg-gray-50"
-              >
-                2
-              </button>
-
-              <button
-                type="button"
-                className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-500 hover:bg-gray-50"
-              >
-                3
-              </button>
-
-              <button
-                type="button"
-                className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-500 hover:bg-gray-50"
-              >
-                Next
-              </button>
-            </div>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-500 hover:enabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+                >
+                  Previous
+                </button>
+                <span className="px-2 text-[8px] text-gray-500">
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  className="h-7 rounded-md border border-gray-200 px-2.5 text-[8px] text-gray-500 hover:enabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>

@@ -92,7 +92,7 @@ def _save_result(inference: Inference, result: dict):
     inference.response_payload = result
     inference.fastapi_request_id = result.get("request_id")
     inference.overall_triage = result.get("overall_triage", "")
-    inference.predicted_class = top_result.get("class", "")
+    inference.predicted_class = top_result.get("predicted_class", "")
     inference.confidence = top_result.get("confidence")
     inference.clinical_summary = result.get(
         "clinical_summary",

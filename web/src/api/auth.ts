@@ -23,7 +23,7 @@ export async function refreshToken(refresh: string) {
   const response = await api.post<{
     access: string;
     refresh?: string;
-  }>("/auth/token/refresh/", {
+  }>("/auth/refresh/", {
     refresh,
   });
 

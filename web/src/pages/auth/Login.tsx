@@ -138,12 +138,11 @@ export function Login() {
         </p>
 
         <h2 className="mt-2 text-[28px] font-semibold tracking-tight text-gray-950">
-          Sign in to MEDAI
+          Sign in to AI Diagnosis Assistant
         </h2>
 
         <p className="mt-2 text-[13px] leading-5 text-gray-500">
-          Access your clinical workspace and
-          AI-assisted analyses.
+          Access your clinical workspace and AI-assisted analyses.
         </p>
       </div>
 

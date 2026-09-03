@@ -17,13 +17,9 @@ class CanAccessInference(BasePermission):
             }
         )
 
-    def has_object_permission(
-        self,
-        request,
-        view,
-        obj,
-    ):
+    def has_object_permission(self, request, view, obj):
         if request.user.role == UserRole.ADMIN:
             return True
-
+        if obj.patient is None:
+            return obj.requested_by_id == request.user.id
         return obj.patient.assignments.filter(clinician=request.user).exists()

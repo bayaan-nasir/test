@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import api from "../../api/client";
-import { getPatients, type Patient as ApiPatient } from "../../api/inference";
+import { getPatients, type Patient as ApiPatient } from "../../api/patients";
 
 type Modality = "tabular" | "image" | "multimodal";
 
@@ -34,28 +34,22 @@ interface ClinicalField {
 
 const initialFields: ClinicalField[] = [
   { key: "age", label: "Age", value: "34", unit: "years" },
-  { key: "temperature", label: "Temperature", value: "38.4", unit: "°C" },
+  { key: "sex", label: "Sex (0 = female, 1 = male)", value: "0" },
+  { key: "glucose", label: "Glucose", value: "100", unit: "mg/dL" },
+  { key: "bmi", label: "BMI", value: "24", unit: "kg/m²" },
   {
-    key: "respiratory_rate",
-    label: "Respiratory rate",
-    value: "24",
-    unit: "bpm",
+    key: "trestbps",
+    label: "Resting blood pressure",
+    value: "120",
+    unit: "mmHg",
   },
-  { key: "heart_rate", label: "Heart rate", value: "96", unit: "bpm" },
-  {
-    key: "oxygen_saturation",
-    label: "Oxygen saturation",
-    value: "94",
-    unit: "%",
-  },
-  { key: "systolic_bp", label: "Systolic BP", value: "128", unit: "mmHg" },
-  { key: "diastolic_bp", label: "Diastolic BP", value: "82", unit: "mmHg" },
-  {
-    key: "symptom_duration",
-    label: "Symptom duration",
-    value: "4",
-    unit: "days",
-  },
+  { key: "chol", label: "Cholesterol", value: "180", unit: "mg/dL" },
+  { key: "thalach", label: "Max heart rate", value: "150", unit: "bpm" },
+  { key: "cp", label: "Chest pain type (0-3)", value: "0" },
+  { key: "hemoglobin", label: "Hemoglobin", value: "13.5", unit: "g/dL" },
+  { key: "salt_intake", label: "Salt intake", value: "6", unit: "g/day" },
+  { key: "sleep_hours", label: "Sleep", value: "7", unit: "hours" },
+  { key: "smoking", label: "Smoking (0 = no, 1 = yes)", value: "0" },
 ];
 
 const models: {
@@ -480,7 +474,7 @@ export function InferenceWorkspace() {
   };
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+    <div className="mx-auto max-w-360 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <div className="mb-6">
         <button
           type="button"
@@ -600,7 +594,7 @@ export function InferenceWorkspace() {
           )}
 
           {showPatientMenu && (
-            <div className="absolute left-4 right-4 top-[86px] z-30 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+            <div className="absolute left-4 right-4 top-21.5 z-30 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
               <div className="border-b border-gray-100 p-2">
                 <div className="relative">
                   <Search
@@ -724,7 +718,7 @@ export function InferenceWorkspace() {
           </button>
 
           {showModelMenu && (
-            <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+            <div className="absolute left-4 right-4 top-18.5 z-20 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
               {models.map((item) => (
                 <button
                   key={item.id}
@@ -956,7 +950,7 @@ export function InferenceWorkspace() {
                   </div>
                 </div>
               ) : (
-                <label className="flex aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50/50 text-center hover:border-gray-400 hover:bg-gray-50">
+                <label className="flex aspect-4/3 w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50/50 text-center hover:border-gray-400 hover:bg-gray-50">
                   <input
                     type="file"
                     accept="image/jpeg,image/png"

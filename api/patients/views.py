@@ -1,5 +1,7 @@
+from django.db.models.deletion import ProtectedError
 from django.db.models import Q
-from rest_framework import generics
+from rest_framework import generics, status
+from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
 from accounts.models import UserRole
@@ -41,14 +43,29 @@ class PatientListCreateView(generics.ListCreateAPIView):
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        patient = serializer.save(created_by=self.request.user)
+
+        # A newly created patient must be assigned to its creating clinician,
+        # otherwise get_queryset() (which filters on `assignments__clinician`)
+        # will never return it back to them.
+        if self.request.user.role == UserRole.CLINICIAN:
+            PatientAssignment.objects.get_or_create(
+                patient=patient,
+                clinician=self.request.user,
+                defaults={
+                    "assigned_by": self.request.user,
+                    "is_primary": True,
+                },
+            )
 
 
-class PatientDetailView(generics.RetrieveUpdateAPIView):
+class PatientDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PatientSerializer
     permission_classes = [
         IsClinicianOrAdmin,
     ]
+    lookup_field = "patient_id"
+    lookup_url_kwarg = "patient_id"
 
     def get_queryset(self):
         user = self.request.user
@@ -57,6 +74,22 @@ class PatientDetailView(generics.RetrieveUpdateAPIView):
             return Patient.objects.all()
 
         return Patient.objects.filter(assignments__clinician=user).distinct()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            instance.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": (
+                        "This patient has existing AI inference records and "
+                        "cannot be deleted."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ClinicalRecordListCreateView(generics.ListCreateAPIView):

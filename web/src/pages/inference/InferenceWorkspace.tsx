@@ -57,9 +57,48 @@ function flattenOptions(field: ModelField) {
   });
 }
 
+function calculatePatientAgeYears(dateOfBirth?: string | null): number | null {
+  if (!dateOfBirth) return null;
+
+  const birth = new Date(dateOfBirth);
+  if (Number.isNaN(birth.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDiff = today.getMonth() - birth.getMonth();
+
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    age -= 1;
+  }
+
+  return age;
+}
+
+function getPatientAutofill(patient: ApiPatient | null): Record<string, string> {
+  if (!patient) return {};
+
+  const autofill: Record<string, string> = {};
+
+  const age = calculatePatientAgeYears(patient.date_of_birth);
+  if (age !== null) {
+    autofill.age = String(age);
+  }
+
+  // SymptomsInput.sex is binary (1 = male, 0 = female) — "OTHER" or a
+  // missing value has no honest mapping, so it's deliberately left blank
+  // rather than guessed.
+  if (patient.sex === "MALE") {
+    autofill.sex = "1";
+  } else if (patient.sex === "FEMALE") {
+    autofill.sex = "0";
+  }
+
+  return autofill;
+}
+
 function toClinicalField(field: ModelField): ClinicalField {
   return {
-    key: field.name,
+    key: field.name.toLowerCase(),
     label: fieldLabel(field),
     value: "",
     type: field.type === "integer" || field.type === "float" ? field.type : "string",
@@ -69,20 +108,22 @@ function toClinicalField(field: ModelField): ClinicalField {
 }
 
 function buildFieldsForModel(tabularModels: ModelRegistryEntry[], modelId: string): ClinicalField[] {
-  if (modelId === AUTO_MODEL_ID) {
+  const dedupe = (fieldsList: ModelField[]) => {
     const seen = new Map<string, ClinicalField>();
-    for (const model of tabularModels) {
-      for (const field of model.fields ?? []) {
-        if (!seen.has(field.name)) {
-          seen.set(field.name, toClinicalField(field));
-        }
+    for (const field of fieldsList) {
+      const normalizedKey = field.name.toLowerCase();
+      if (!seen.has(normalizedKey)) {
+        seen.set(normalizedKey, toClinicalField(field));
       }
     }
     return Array.from(seen.values());
+  };
+  if (modelId === AUTO_MODEL_ID) {
+    return dedupe(tabularModels.flatMap((model) => model.fields ?? []));
   }
 
   const model = tabularModels.find((m) => m.model_id === modelId);
-  return (model?.fields ?? []).map(toClinicalField);
+  return dedupe(model?.fields ?? []);
 }
 
 function parseClinicalValue(value: string) {
@@ -225,6 +266,36 @@ export function InferenceWorkspace() {
     if (isLoadingRegistry) return;
     setFields(buildFieldsForModel(tabularModels, selectedTabularModelId));
   }, [isLoadingRegistry, tabularModels, selectedTabularModelId]);
+
+  const patientAutofillRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    const autofill = getPatientAutofill(selectedPatient);
+
+    setFields((current) =>
+      current.map((field) => {
+        const newValue = autofill[field.key];
+        const previousAutoValue = patientAutofillRef.current[field.key];
+        const untouchedSinceLastAutofill =
+          field.value === "" || field.value === previousAutoValue;
+
+        if (newValue !== undefined && untouchedSinceLastAutofill) {
+          return { ...field, value: newValue };
+        }
+
+        // Patient was cleared or switched away from — revert a field that
+        // was auto-filled and never manually edited, rather than leaving
+        // a stale value from the previous patient sitting in the form.
+        if (newValue === undefined && previousAutoValue !== undefined && field.value === previousAutoValue) {
+          return { ...field, value: "" };
+        }
+
+        return field;
+      }),
+    );
+
+    patientAutofillRef.current = autofill;
+  }, [isLoadingRegistry, tabularModels, selectedTabularModelId, selectedPatientId]);
 
   useEffect(() => {
     let active = true;

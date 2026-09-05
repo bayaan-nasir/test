@@ -1,4 +1,7 @@
+from fileinput import filename
+import mimetypes
 import json
+from pathlib import Path
 from socket import timeout
 
 import requests
@@ -48,12 +51,18 @@ class MLClient:
         timeout: int = 180,
     ) -> dict:
         url = f"{self.base_url}/api/ml/diagnose/image-based"
+        filename = Path(getattr(file, "name", "") or "upload").name
+        content_type = (
+            getattr(file, "content_type", None)
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
 
         files = {
             "file": (
-                file.name,
+                filename,
                 file,
-                getattr(file, "content_type", None),
+                content_type,
             )
         }
 

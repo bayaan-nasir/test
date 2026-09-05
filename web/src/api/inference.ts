@@ -15,8 +15,12 @@ export interface InferenceModelResult {
 	confidence: number;
 	confidence_pct: string;
 	triage: TriageLevel;
-	explainability: Record<string, unknown>;
 	model_used: string;
+	explainability?: {
+		type: string;
+		heatmap_url?: string | null;
+		top_features?: unknown;
+	};
 }
 
 export interface InferenceResponsePayload {
@@ -94,57 +98,59 @@ export interface ModelRegistryResponse {
 }
 
 export interface ModelField {
-  name: string;
-  type: "integer" | "float" | "string" | "file";
-  required: boolean;
-  description?: string;
-  options?: ModelFieldOption[];
+	name: string;
+	type: "integer" | "float" | "string" | "file";
+	required: boolean;
+	description?: string;
+	options?: ModelFieldOption[];
 }
 
 export interface ModelRegistryEntry {
-  model_id: string;
-  model_name: string;
-  modality: "tabular" | "image";
-  task: string;
-  framework: string[];
-  version: string;
-  production_ready: boolean;
-  endpoints: Record<string, string>;
-  fields?: ModelField[];
-  image_type_value?: string;
+	model_id: string;
+	model_name: string;
+	modality: "tabular" | "image";
+	task: string;
+	framework: string[];
+	version: string;
+	production_ready: boolean;
+	endpoints: Record<string, string>;
+	fields?: ModelField[];
+	image_type_value?: string;
 }
 
 export interface ModelRegistryResponse {
-  total_models: number;
-  production_ready_count: number;
-  models: ModelRegistryEntry[];
+	total_models: number;
+	production_ready_count: number;
+	models: ModelRegistryEntry[];
 }
 
 export async function getModelRegistry() {
-  const response = await api.get<ModelRegistryResponse>("/inference/models/");
-  return response.data;
+	const response = await api.get<ModelRegistryResponse>("/inference/models/");
+	return response.data;
 }
 
 export interface ModelRecentRun {
-  inference_id: number;
-  patient_name: string;
-  predicted_class: string;
-  confidence_pct: string;
-  triage: TriageLevel;
-  created_at: string | null;
+	inference_id: number;
+	patient_name: string;
+	predicted_class: string;
+	confidence_pct: string;
+	triage: TriageLevel;
+	created_at: string | null;
 }
 
 export interface ModelUsageStat {
-  total_runs: number;
-  avg_confidence_pct: number | null;
-  avg_latency_seconds: number | null;
-  last_run_at: string | null;
-  recent_runs: ModelRecentRun[];
+	total_runs: number;
+	avg_confidence_pct: number | null;
+	avg_latency_seconds: number | null;
+	last_run_at: string | null;
+	recent_runs: ModelRecentRun[];
 }
 
 export type ModelStatsResponse = Record<string, ModelUsageStat>;
 
 export async function getModelStats() {
-  const response = await api.get<ModelStatsResponse>("/inference/model-stats/");
-  return response.data;
+	const response = await api.get<ModelStatsResponse>(
+		"/inference/model-stats/",
+	);
+	return response.data;
 }
